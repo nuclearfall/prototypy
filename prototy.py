@@ -15,7 +15,7 @@ import textwrap
 from io import BytesIO
 
 # ─── Constants ──────────────────────────────────────────────────────────────────
-GRID_SIZE = 20
+PPI = 300
 CANVAS_WIDTH = 800 # Keep for initial window size hint
 CANVAS_HEIGHT = 600 # Keep for initial window size hint
 PANEL_WIDTH = 200
@@ -303,6 +303,10 @@ class Shape:
         self.clip_image: bool = True
         self.path = ''
         self.text = ''
+        self.display_x: float
+        self.display_y: float
+        self.display_w: float
+        self.display_h: float
 
     @property
     def get_bbox(self):
@@ -634,10 +638,15 @@ class ComponentModel:
 
 # DrawingModel class remains the core data and state manager
 class DrawingModel:
-    def __init__(self):
+    def __init__(self, ppi=PPI):
         self.layers: List[Layer] = []
         self.selected_layer_idx = 0
-        self.grid_size = GRID_SIZE
+        self.ppi = PPI
+        self.measure = "inch"
+        self.grid_division = 2 # This is a default value until provided the ppi of screen by View
+        self.grid_subdivision = 8
+        self.grid_subsubdivision = 16
+        self.grid_size = self.ppi / self.grid_subdivision # we'll default to the assumption of measuring in a subdivision of 1/8"
         self._shape_map: Dict[Any, Shape] = {} # Maps all shape IDs to shape objects
         self.selected_shape: Optional[Any] = None # ID of the selected shape
         self.grid_visible = True # Model state
@@ -906,11 +915,35 @@ class DrawingView(tk.Frame):
         # Build UI
         self._build_ui()
 
+        # Check user's system resolution first, then adjust grid.
+        self.ppi = self.canvas.winfo_fpixels("1i")
+        # Set grid size to actual ppi of user's native resolution as soon as we grab it.
+        self.ppi_to_model_grid(self.controller.model)
+
         # Bind events to controller methods
         self._bind_events()
 
         # Initial setup
         master.title("Enhanced Vector Editor - Untitled") # Initial title
+
+    def ppi_to_model_grid(self, model, measure=None):
+        # if none, default to last used by the model
+        if not measure:
+            measure = model.measure
+        else:
+            model.measure = measure
+
+        if measure == "inch":
+            model.grid_ppi = self.ppi
+            model.subdivision = 16
+            model.division = 4
+            model.grid_size = int(model.ppi / model.subdivision)
+        if measure == "cm":
+            model.grid_ppi = int(self.ppi * 2.54)
+            model.subdivision = 10
+            model.division = 1
+            model.grid_size = int(model.ppi)
+            return grid_size
 
     def _build_ui(self):
         # Toolbar
@@ -982,9 +1015,77 @@ class DrawingView(tk.Frame):
         tk.Button(layer_btns, text="↑", command=self.controller.model.move_layer_up).pack(side=tk.LEFT)
         tk.Button(layer_btns, text="↓", command=self.controller.model.move_layer_down).pack(side=tk.LEFT)
 
-        # Canvas (Drawing Area)
-        self.canvas = tk.Canvas(self.pane, bg='white', width=600)
-        self.pane.add(self.canvas, stretch="always")
+
+        # === Drawing container (with rulers + canvas) ===
+        self.drawing_area = tk.Frame(self.pane)
+        self.pane.add(self.drawing_area, stretch="always")
+
+        # Canvas (Drawing Surface)
+        self.canvas = tk.Canvas(self.drawing_area, bg='white', width=600)
+        self.pane.add(self.drawing_area, stretch="always")
+  
+        # Ruler sizes
+        self.ruler_size = 20
+        # Top-left corner
+        self.corner = tk.Canvas(
+            self.drawing_area,
+            width=self.ruler_size/2,
+            height=self.ruler_size/2,
+            bg='lightgray',
+            highlightthickness=0
+        )
+        # Horizontal ruler
+        self.horizontal_ruler = tk.Canvas(
+            self.drawing_area,
+            height=self.ruler_size/2,
+            bg='lightgray',
+            highlightthickness=0
+        )
+        # Vertical ruler
+        self.vertical_ruler = tk.Canvas(
+            self.drawing_area,
+            width=self.ruler_size/2,
+            bg='lightgray',
+            highlightthickness=0
+        )
+
+        # Actual drawing surface
+        self.canvas = tk.Canvas(
+            self.drawing_area,
+            bg='white',
+            highlightthickness=0,
+            xscrollincrement=1,
+            yscrollincrement=1
+        )
+
+        # Scrollbars attached to drawing canvas
+        self.h_scroll = tk.Scrollbar(
+            self.drawing_area,
+            orient=tk.HORIZONTAL,
+            command=self.canvas.xview
+        )
+        self.v_scroll = tk.Scrollbar(
+            self.drawing_area,
+            orient=tk.VERTICAL,
+            command=self.canvas.yview
+        )
+        self.canvas.configure(
+            xscrollcommand=self.h_scroll.set,
+            yscrollcommand=self.v_scroll.set
+        )
+
+        # Layout for rulers, canvas, scrollbars
+        self.corner.grid(row=0, column=0, sticky='nsew')
+        self.horizontal_ruler.grid(row=0, column=1, sticky='ew')
+        self.vertical_ruler.grid(row=1, column=0, sticky='ns')
+        self.canvas.grid(row=1, column=1, sticky='nsew')
+        self.h_scroll.grid(row=2, column=1, sticky='ew')
+        self.v_scroll.grid(row=1, column=2, sticky='ns')
+
+        # Make drawing_area expandable
+        self.drawing_area.rowconfigure(1, weight=1)
+        self.drawing_area.columnconfigure(1, weight=1)
+
 
         # Right Panel (Data Merge Status)
         self.right_panel = tk.Frame(self.pane, width=PANEL_WIDTH)
@@ -1049,7 +1150,7 @@ class DrawingView(tk.Frame):
         print("DrawingView.refresh_all: Canvas cleared ('all'). Internal item tracking cleared.")
 
         # Draw grid based on model state
-        self._draw_grid(grid_visible, grid_size, self.canvas.winfo_width(), self.canvas.winfo_height())
+        self._draw_grid()
         print("DrawingView.refresh_all: Grid drawn.")
 
         # Draw shapes in layer-stacking order (bottom layer first on canvas)
@@ -1157,14 +1258,42 @@ class DrawingView(tk.Frame):
         print("DrawingView.refresh_all: refresh_all finished.")
 
 
-    def _draw_grid(self, visible: bool, grid_size: int, canvas_width: int, canvas_height: int):
+    def _draw_grid(self):
         """Draws the grid on the canvas (View logic)."""
+        grid_size = self.controller.model.grid_size
+        canvas_width, canvas_height = self.canvas.winfo_width(), self.canvas.winfo_height()
         self.canvas.delete("grid")
-        if visible and canvas_width > 0 and canvas_height > 0:
+        if self.controller.model.grid_visible and canvas_width > 0 and canvas_height > 0:
             for x in range(0, canvas_width, grid_size):
                 self.canvas.create_line(x, 0, x, canvas_height, fill='lightgray', tags="grid")
             for y in range(0, canvas_height, grid_size):
                 self.canvas.create_line(0, y, canvas_width, y, fill='lightgray', tags="grid")
+        print("Now Drawing Ruler")
+        self._draw_ruler()
+
+    def _draw_ruler(self):
+        self.horizontal_ruler.delete("all")
+        self.vertical_ruler.delete("all")
+        grid_size = self.controller.model.grid_size
+        divisions = self.controller.model.grid_division
+        subdivisions = self.controller.model.grid_subdivision
+        subsub = self.controller.model.grid_subsubdivision
+        canvas_width, canvas_height = self.canvas.winfo_width(), self.canvas.winfo_height()
+        if self.controller.model.grid_visible and canvas_width > 0 and canvas_height > 0:
+            for i, x in enumerate(range(0, canvas_width, grid_size)):
+                if i % divisions == 0 and i % subdivisions != 0:
+                    self.horizontal_ruler.create_line(x, 0, x, self.ruler_size/subdivisions, fill='gray', tags="grid")
+                elif i % subdivisions == 0:
+                    self.horizontal_ruler.create_line(x, 0, x, self.ruler_size/divisions, fill='black', tags="grid")
+                else:
+                    self.horizontal_ruler.create_line(x, 0, x, self.ruler_size/subsub, fill='gray', tags="grid")
+            for i, y in enumerate(range(0, canvas_height, grid_size)):
+                if i % divisions == 0 and i % subdivisions != 0:
+                    self.vertical_ruler.create_line(0, y, self.ruler_size/subdivisions, y, fill='gray', tags="grid")
+                elif i % subdivisions == 0:
+                    self.vertical_ruler.create_line(0, y, self.ruler_size/divisions, y, fill='black', tags="grid")
+                else:
+                    self.vertical_ruler.create_line(0, y, self.ruler_size/subsub, y, fill='gray', tags="grid")
 
     def _clear_shape_drawing_on_canvas(self, shape_id):
         """Clears all canvas items and PhotoImage references associated with a shape (View logic)."""
