@@ -131,6 +131,150 @@ def _update_coords_if_valid(shape, new_coords, min_size=5):
             return True
     return False
 
+# ——— Custom Layer Panel Treeview ———————————————————————————————————————————————
+
+class LayerTree(tk.Frame):
+    def __init__(self, master):
+        super().__init__(master)
+        self.tree = ttk.Treeview(self, show="tree", selectmode="extended")
+        self.tree.pack(fill="both", expand=True)
+
+        self.items = {}
+        self.drag_selection = []
+        self.drop_target = None
+
+        self.tree.tag_configure("drop_target", background="#ccccff")
+
+        # Top control buttons
+        btn_frame = tk.Frame(self)
+        btn_frame.pack(fill="x", pady=4)
+
+        tk.Button(btn_frame, text="Add Layer", command=self.add_layer).pack(side="left")
+        tk.Button(btn_frame, text="Delete Selected", command=self.delete_selected).pack(side="left")
+        tk.Button(btn_frame, text="Group Selected", command=self.group_selected).pack(side="left")
+
+        self.tree.bind("<ButtonPress-1>", self.on_button_press)
+        self.tree.bind("<B1-Motion>", self.on_drag_motion)
+        self.tree.bind("<ButtonRelease-1>", self.on_button_release)
+        self.tree.bind("<Double-1>", self.on_rename)
+
+        # Add initial layers
+        for name in ["Background", "Sketch", "Ink", "Color", "Effects"]:
+            self.add_layer(name)
+
+    def add_layer(self, name=None):
+        selection = self.tree.selection()
+        if selection:
+            ref_item = selection[0]
+            if self.items.get(ref_item, {}).get("type") == "group":
+                parent = ref_item
+                index = "end"
+            else:
+                parent = self.tree.parent(ref_item)
+                index = self.tree.index(ref_item)
+        else:
+            parent = ""
+            index = 0
+
+        # Generate unique layer name if not provided
+        if not name:
+            existing_names = {
+                self.tree.item(i, "text")
+                for i in self.tree.get_children("")
+            }
+            i = 1
+            while (name := f"Layer {i}") in existing_names:
+                i += 1
+
+        # Insert layer
+        item_id = self.tree.insert(parent, index, text=name)
+        self.items[item_id] = {"type": "layer", "name": name}
+        self.tree.selection_set(item_id)
+        return item_id
+
+    def delete_selected(self):
+        for item in self.tree.selection():
+            self.tree.delete(item)
+            self.items.pop(item, None)
+
+    def group_selected(self):
+        selected = self.tree.selection()
+        if len(selected) < 2:
+            print("Select at least two layers to group.")
+            return
+        group_id = self.tree.insert("", "end", text="Group", open=True)
+        self.items[group_id] = {"type": "group", "children": []}
+
+        for item in selected:
+            self.tree.move(item, group_id, "end")
+            self.items[group_id]["children"].append(self.items.pop(item, None))
+
+    def on_button_press(self, event):
+        item = self.tree.identify_row(event.y)
+
+        # Let treeview manage selection (supports Ctrl, Shift)
+        # Only prepare drag if click is on an item
+        if item:
+            self.drag_selection = self.tree.selection()
+        else:
+            self.drag_selection = []
+
+    def on_drag_motion(self, event):
+        if not self.drag_selection:
+            return
+        target = self.tree.identify_row(event.y)
+
+        if self.drop_target and self.drop_target != target:
+            self.tree.item(self.drop_target, tags=())
+
+        if target and target not in self.drag_selection:
+            self.tree.item(target, tags=("drop_target",))
+            self.drop_target = target
+        else:
+            self.drop_target = None
+
+    def on_button_release(self, event):
+        if not self.drag_selection:
+            return
+        if self.drop_target:
+            self.tree.item(self.drop_target, tags=())
+
+            parent = self.tree.parent(self.drop_target)
+            index = self.tree.index(self.drop_target)
+
+            for item in self.drag_selection:
+                if item == self.drop_target:
+                    continue
+                self.tree.move(item, parent, index)
+                index += 1
+
+        self.drag_selection = []
+        self.drop_target = None
+
+    def on_rename(self, event):
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+
+        x, y, width, height = self.tree.bbox(item)
+        entry = tk.Entry(self.tree)
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.insert(0, self.tree.item(item, "text"))
+        entry.focus()
+
+        def commit_rename(e=None):
+            new_text = entry.get()
+            self.tree.item(item, text=new_text)
+            if item in self.items:
+                self.items[item]["name"] = new_text
+            entry.destroy()
+
+        def cancel_rename(e=None):
+            entry.destroy()
+
+        entry.bind("<Return>", commit_rename)
+        entry.bind("<FocusOut>", cancel_rename)
+        entry.bind("<Escape>", cancel_rename)
 
 # ─── Model - Data Classes ──────────────────────────────────────────────────────
 
@@ -316,31 +460,56 @@ class Hexagon(Shape):
         super().__init__(id=id, shape_type='hexagon', coords=coords, name=name)
 
     def draw_shape(self, canvas=None, draw: Optional[ImageDraw.ImageDraw]=None):
-        if not self.coords or len(self.coords) < 4:
-            return
-        
-        x1, y1, x2, y2 = self.coords
-        width = abs(x2 - x1)
-        height = abs(y2 - y1)
-        center_x = (x1 + x2) / 2
-        center_y = (y1 + y2) / 2
-        
-        # Calculate hexagon points with integer coordinates
-        points = []
-        for i in range(6):
-            angle_deg = 60 * i - 30
-            angle_rad = math.radians(angle_deg)
-            x = int(center_x + (width/2) * math.cos(angle_rad))
-            y = int(center_y + (height/2) * math.sin(angle_rad))
-            points.extend([x, y])
-        
-        tags = ('shape', f'id{self.id}')  # Ensure tags are properly set
-        
-        if canvas:
-            canvas.create_polygon(points, outline=self.color, 
-                                width=self.line_width, fill='', tags=tags)
-        elif draw:
-            draw.polygon(points, outline=self.color, width=self.line_width)
+            print(f"Hexagon ID {self.id}: Step 1 - Entered draw_shape.") # Very first print
+            if not self.coords or len(self.coords) < 4:
+                print(f"Hexagon ID {self.id}: Step 2 - Invalid coords: {self.coords}")
+                return
+
+            print(f"Hexagon ID {self.id}: Step 3 - Coords are valid: {self.coords}")
+            x1, y1, x2, y2 = self.coords
+            width = abs(x2 - x1)
+            height = abs(y2 - y1)
+            center_x = (x1 + x2) / 2
+            center_y = (y1 + y2) / 2
+            print(f"Hexagon ID {self.id}: Step 4 - Calculated dimensions: w={width}, h={height}, center=({center_x}, {center_y})")
+
+            tags = ('shape', f'id{self.id}')
+
+            if canvas:
+                print(f"Hexagon ID {self.id}: Step 5 - Drawing on canvas.")
+                points = []
+                # Use floating-point coordinates for canvas
+                for i in range(6):
+                    print(f"Hexagon ID {self.id}: Step 6 - Calculating point {i}.")
+                    angle_deg = 60 * i - 30
+                    angle_rad = math.radians(angle_deg)
+                    x = center_x + (width/2) * math.cos(angle_rad)
+                    y = center_y + (height/2) * math.sin(angle_rad)
+                    points.extend([x, y])
+                    print(f"Hexagon ID {self.id}: Step 7 - Point {i} calculated: ({x}, {y}).")
+
+                print(f"Hexagon ID {self.id}: Step 8 - Final points list: {points}")
+                item_id = canvas.create_polygon(points, outline=self.color,
+                                    width=self.line_width, fill='', tags=tags)
+                print(f"Hexagon ID {self.id}: Step 9 - Created canvas item with ID: {item_id} and tags: {tags}")
+
+            elif draw:
+                print(f"Hexagon ID {self.id}: Step 10 - Drawing on PIL ImageDraw.")
+                points = []
+                # Use integer coordinates for PIL drawing
+                for i in range(6):
+                     print(f"Hexagon ID {self.id}: Step 11 - Calculating PIL point {i}.")
+                     angle_deg = 60 * i - 30
+                     angle_rad = math.radians(angle_deg)
+                     x = int(center_x + (width/2) * math.cos(angle_rad))
+                     y = int(center_y + (height/2) * math.sin(angle_rad))
+                     points.extend([x, y])
+                     print(f"Hexagon ID {self.id}: Step 12 - PIL Point {i} calculated: ({x}, {y}).")
+                print(f"Hexagon ID {self.id}: Step 13 - Final PIL points list: {points}")
+                draw.polygon(points, outline=self.color, width=self.line_width)
+                print(f"Hexagon ID {self.id}: Step 14 - PIL polygon drawn.")
+
+            print(f"Hexagon ID {self.id}: Step 15 - Exited draw_shape.") # Print at the very end
 
     def clip_image_to_geometry(self, pil_image: Image.Image) -> Image.Image:
         x1, y1, x2, y2 = self.get_bbox
@@ -374,22 +543,21 @@ class Hexagon(Shape):
         height = abs(y2 - y1)
         
         # Transform point to hexagon coordinate space
-        dx = (x - center_x) / (width/2)
-        dy = (y - center_y) / (height/2)
+        dx = (x - center_x) / (width/2) if width != 0 else 0
+        dy = (y - center_y) / (height/2) if height != 0 else 0
         
-        # Check if point is inside hexagon
-        # Using hexagon point-in-polygon test
+        # Check if point is inside hexagon using cross product
         for i in range(6):
-            angle1 = math.pi / 180 * (60 * i - 30)
-            angle2 = math.pi / 180 * (60 * (i + 1) - 30)
+            angle1 = math.radians(60 * i - 30)
+            angle2 = math.radians(60 * (i + 1) - 30)
             
             x1_hex = math.cos(angle1)
             y1_hex = math.sin(angle1)
             x2_hex = math.cos(angle2)
             y2_hex = math.sin(angle2)
             
-            # Check which side of the edge the point is on
-            edge = (x2_hex - x1_hex) * (dy - y1_hex) - (y2_hex - y1_hex) * (dx - x1_hex)
+            # Calculate edge equation using AP × AB instead of AB × AP
+            edge = (dx - x1_hex) * (y2_hex - y1_hex) - (dy - y1_hex) * (x2_hex - x1_hex)
             if edge > 0:
                 return False
                 
@@ -452,6 +620,18 @@ class Layer:
         return layer
 
 
+class ComponentModel:
+    def __init__(self, layers, name=None):
+        self.layers = layers  # list of LayerModel or pre-flattened Shapes
+        self.name = name or "Component"
+        self.id = uuid.uuid4().hex
+        self.flatten_cache = None
+        self.dirty = True
+
+    def get_bounds(self):
+        pass
+
+
 # DrawingModel class remains the core data and state manager
 class DrawingModel:
     def __init__(self):
@@ -459,9 +639,7 @@ class DrawingModel:
         self.selected_layer_idx = 0
         self.grid_size = GRID_SIZE
         self._shape_map: Dict[Any, Shape] = {} # Maps all shape IDs to shape objects
-        # preview_shape (tkinter item ID) and selected_shape (ID) are View/Controller state
         self.selected_shape: Optional[Any] = None # ID of the selected shape
-        # drag_start, is_resizing, is_moving, resize_start are Controller state
         self.grid_visible = True # Model state
         self.snap_to_grid = True # Model state
         # grid_var, snap_var are View state
@@ -559,6 +737,23 @@ class DrawingModel:
     def get_shape(self, sid: Any) -> Optional[Shape]:
         return self._shape_map.get(sid)
 
+    def get_sid(self, shape):
+        for k, v in self._shape_map.items():
+            if v == shape:
+                return k 
+    ## Currently being used strictly for export but may be handy elsewhere...
+    def get_model_bounds(self) -> tuple[int, int, int, int]:
+        xs, ys = [], []
+        for layer in self.layers:
+            for shape in layer.shapes.values():
+                min_x, min_y, max_x, max_y = shape.get_bbox
+                xs.extend([min_x, max_x])
+                ys.extend([min_y, max_y])
+
+        if not xs or not ys:
+            return (0, 0, 100, 100)
+        return (min(xs), min(ys), max(xs), max(ys))
+
     # In the DrawingModel class, inside the add_shape method, BEFORE self.notify_observers():
     def add_shape(self, shape: Shape):
         """Adds a shape to the current layer and the global shape map."""
@@ -566,7 +761,6 @@ class DrawingModel:
              print("DrawingModel.add_shape: Error: Attempted to add a non-Shape object.")
              return
 
-        # Use the max ID + 1 approach (or your current while loop)
         if not self._shape_map:
             iid = 0
         else:
@@ -873,7 +1067,6 @@ class DrawingView(tk.Frame):
                  # Use View method to draw the shape
                  self._draw_shape_on_canvas(shp, self.canvas)
 
-        # Highlight the selected shape with a blue dashed rectangle + handle
         if selected_shape_id is not None:
             selected_shape = model_state.get_shape(selected_shape_id) # View gets shape from model
             if selected_shape:
@@ -973,7 +1166,6 @@ class DrawingView(tk.Frame):
             for y in range(0, canvas_height, grid_size):
                 self.canvas.create_line(0, y, canvas_width, y, fill='lightgray', tags="grid")
 
-
     def _clear_shape_drawing_on_canvas(self, shape_id):
         """Clears all canvas items and PhotoImage references associated with a shape (View logic)."""
         if shape_id in self._shape_id_to_canvas_items:
@@ -1005,8 +1197,33 @@ class DrawingView(tk.Frame):
              center_x = (left_x + right_x) // 2
              pts = [left_x, base_y, center_x, apex_y, right_x, base_y]
              item_id = canvas.create_polygon(*pts, outline=shape.color, width=shape.line_width, fill='', tags=tags)
+        elif shape.shape_type == 'hexagon':
+            if not shape.coords or len(shape.coords) < 4:
+                return
+            x1, y1, x2, y2 = shape.coords
+            width  = abs(x2 - x1)
+            height = abs(y2 - y1)
+            cx = (x1 + x2) / 2
+            cy = (y1 + y2) / 2
 
-        if item_id is not None: self._shape_id_to_canvas_items.setdefault(shape.id, []).append(item_id)
+            pts = []
+            for i in range(6):
+                θ = math.radians(60*i)
+                pts.extend([
+                    cx + (width/2)  * math.cos(θ),
+                    cy + (height/2) * math.sin(θ),
+                ])
+
+            item_id = canvas.create_polygon(
+                *pts,
+                outline=shape.color,
+                width=shape.line_width,
+                fill='',
+                tags=tags
+            )
+            # self._shape_id_to_canvas_items.setdefault(shape.id, []).append(item_id)
+
+        #if item_id is not None: self._shape_id_to_canvas_items.setdefault(shape.id, []).append(item_id)
 
 
     def _draw_content_on_canvas(self, shape: Shape, canvas: tk.Canvas):
@@ -1038,7 +1255,7 @@ class DrawingView(tk.Frame):
              except Exception as e:
                  print(f"!! View: Error drawing Tkinter image content for shape {shape.id}: {e}")
 
-        if item_id is not None: self._shape_id_to_canvas_items.setdefault(shape.id, []).append(item_id)
+        #if item_id is not None: self._shape_id_to_canvas_items.setdefault(shape.id, []).append(item_id)
 
 
     def _draw_name_label_on_canvas(self, shape: Shape, canvas: tk.Canvas):
@@ -1105,41 +1322,10 @@ class DrawingView(tk.Frame):
 
          # PIL Image content pasting is handled in _draw_shape_on_pil using clip_image_to_geometry
 
-    def _draw_name_label_on_pil(self, shape: Shape, draw: ImageDraw.ImageDraw):
-         """Draws the name label on the PIL drawing context (View logic)."""
-         if not shape.name: return
-         x1, y1, x2, y2 = shape.get_bbox; tx, ty = min(x1, x2), min(y1, y2)
-         label_text = shape.name; font_size = 8; padding = 2; label_color = 'black'
-         box_fill_color = (211, 211, 211, 200); box_outline_color = (128, 128, 128); line_width = 1
-
-         try:
-              try: font = ImageFont.truetype("arial.ttf", size=font_size);
-              except IOError:
-                   try: font = ImageFont.truetype("LiberationSans-Regular.ttf", size=font_size);
-                   except IOError: font = ImageFont.load_default();
-
-              try: text_bbox = font.getbbox(label_text); text_width = text_bbox[2] - text_bbox[0]; text_height = text_bbox[3] - text_bbox[1];
-              except Exception:
-                   try: text_width, text_height = font.getsize(label_text);
-                   except Exception: text_width, text_height = len(label_text) * (font_size // 2), font_size;
-
-              box_width = text_width + 2 * padding; box_height = text_height + 2 * padding
-              original_x1, original_y1, original_x2, original_y2 = shape.coords; original_shape_width = abs(original_x2 - original_x1);
-              if box_width > original_shape_width: box_width = original_shape_width;
-
-              label_x1, label_y1 = tx, ty; label_x2, label_y2 = label_x1 + box_width, label_y1 + box_height
-
-              draw.rectangle([label_x1, label_y1, label_x2, label_y2], fill=box_fill_color, outline=box_outline_color, width=line_width)
-              text_x = label_x1 + padding; text_y = label_y1 + padding
-              draw.text((text_x, text_y), label_text, fill=label_color, font=font)
-         except Exception as e: print(f"!! View: Error drawing PIL name label for shape {shape.id}: {e}")
-
-
     def _draw_shape_on_pil(self, shape: Shape, draw: ImageDraw.ImageDraw, image: Image.Image):
          """Draws a complete shape on a PIL drawing context (View logic)."""
          self._draw_shape_outline_on_pil(shape, draw)
          self._draw_content_on_pil(shape, draw)
-         self._draw_name_label_on_pil(shape, draw)
 
          if shape.container_type == 'Image' and shape.content:
              x1, y1, x2, y2 = shape.get_bbox
@@ -1397,30 +1583,139 @@ class DrawingView(tk.Frame):
          if col_name != "Value": return None
 
          return (row_id, col_name)
+    # Render a card as an image. This will be used in the future to render a Component class
+    # but is primarily used for card exporting at the time.   
+    def flatten_card(self, row_data: dict, model: DrawingModel) -> Image.Image:
+        """
+        Renders the full card into a high-resolution, unscaled image (flattened).
+        All data is merged, and all shapes drawn into one image at model's native pixel resolution.
+        This image can later be resized or stretched as needed.
 
-# --- Helper for PIL drawing with offset ---
-class OffsetDraw:
-    def __init__(self, draw, dx, dy):
-        self.draw = draw
-        self.dx = dx
-        self.dy = dy
+        Returns:
+            A PIL.Image in RGBA mode.
+        """
+        from PIL import Image, ImageDraw, ImageFont
+        import math
+        import textwrap
 
-    def __getattr__(self, attr):
-        orig = getattr(self.draw, attr)
-        if callable(orig):
-            def wrapped(*args, **kwargs):
-                shifted_args = self._shift_args(args)
-                return orig(*shifted_args, **kwargs)
-            return wrapped
-        return orig
+        # Determine bounds
+        min_x, min_y, max_x, max_y = model.get_model_bounds()
+        width = int(round(max_x - min_x))
+        height = int(round(max_y - min_y))
+        if width <= 0 or height <= 0:
+            width, height = 1, 1
 
-    def _shift_args(self, args):
-        def shift(val):
-            if isinstance(val, tuple) and len(val) == 2: return (val[0] + self.dx, val[1] + self.dy)
-            elif isinstance(val, list): return [shift(p) for p in val]
-            elif isinstance(val, (int, float, str, bool, type(None))): return val
-            return val
-        return tuple(shift(p) for p in args)
+        # Create a blank RGBA image
+        image = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+        draw = ImageDraw.Draw(image)
+
+        # Find a background shape (covers entire bounds)
+        background_shape = None
+        for layer in model.layers:
+            for shape in layer.shapes.values():
+                if shape.container_type == 'Image':
+                    bbox = shape.get_bbox
+                    if (abs(bbox[0] - min_x) < 1e-6 and
+                        abs(bbox[1] - min_y) < 1e-6 and
+                        abs(bbox[2] - max_x) < 1e-6 and
+                        abs(bbox[3] - max_y) < 1e-6):
+                        background_shape = shape
+                        break
+            if background_shape:
+                break
+
+        if background_shape and isinstance(background_shape.content, Image.Image):
+            bg = background_shape.content.resize((width, height), Image.Resampling.LANCZOS)
+            image.paste(bg, (0, 0))
+
+        # Draw other shapes
+        for layer in model.layers:
+            for sid in sorted(layer.shapes.keys()):
+                shape = layer.shapes[sid]
+                if shape == background_shape:
+                    continue
+
+                # CSV merge
+                if shape.name.startswith('@'):
+                    val = row_data.get(shape.name, '')
+                    if shape.container_type == 'Text':
+                        shape.content = str(val) if val is not None else ''
+                    elif shape.container_type == 'Image':
+                        try:
+                            shape.content = Image.open(val).convert('RGBA') if val else None
+                        except Exception as e:
+                            print(f"!! Failed to load image for shape {shape.name}: {e}")
+                            shape.content = None
+
+                # Bounding box
+                bbox = shape.get_bbox
+                x1, y1, x2, y2 = map(int, bbox)
+                w, h = x2 - x1, y2 - y1
+
+                # Outline
+                if shape.shape_type == 'rectangle':
+                    draw.rectangle([x1, y1, x2, y2], outline=shape.color, width=shape.line_width)
+                elif shape.shape_type == 'oval':
+                    draw.ellipse([x1, y1, x2, y2], outline=shape.color, width=shape.line_width)
+                elif shape.shape_type == 'triangle':
+                    cx = (x1 + x2) // 2
+                    pts = [(x1, y2), (cx, y1), (x2, y2)]
+                    draw.polygon(pts, outline=shape.color, width=shape.line_width)
+                elif shape.shape_type == 'hexagon':
+                    cx = (x1 + x2) // 2
+                    cy = (y1 + y2) // 2
+                    hw, hh = (x2 - x1) / 2, (y2 - y1) / 2
+                    hex_pts = [
+                        (int(cx + hw * math.cos(math.radians(60 * i - 30))),
+                         int(cy + hh * math.sin(math.radians(60 * i - 30))))
+                        for i in range(6)
+                    ]
+                    draw.polygon(hex_pts, outline=shape.color, width=shape.line_width)
+
+                # Content
+                if shape.container_type == 'Text' and isinstance(shape.content, str):
+                    try:
+                        font_size = int(h * 0.8)
+                        try:
+                            font = ImageFont.truetype("arial.ttf", font_size)
+                        except IOError:
+                            font = ImageFont.load_default()
+
+                        avg_char_width = font.getlength('n') if hasattr(font, 'getlength') else 7
+                        max_chars = max(int(w // avg_char_width), 1)
+                        wrapped = textwrap.fill(shape.content, width=max_chars)
+                        lines = wrapped.split('\n')
+
+                        line_height = font.getbbox('Ay')[3] - font.getbbox('Ay')[1] if hasattr(font, 'getbbox') else font.getsize('Ay')[1]
+                        max_lines = int(h // line_height)
+                        for i, line in enumerate(lines[:max_lines]):
+                            draw.text((x1 + 2, y1 + i * line_height + 2), line, font=font, fill=shape.color)
+                    except Exception as e:
+                        print(f"!! Failed to draw text in shape {shape.name}: {e}")
+
+                elif shape.container_type == 'Image' and isinstance(shape.content, Image.Image):
+                    img = shape.content.resize((w, h), Image.Resampling.LANCZOS)
+                    if hasattr(shape, 'clip_image_to_geometry'):
+                        img = shape.clip_image_to_geometry(img)
+                    image.paste(img, (x1, y1), img if img.mode == 'RGBA' else None)
+
+        return image
+
+    def render_merged_card(self,
+                           row_data: dict,
+                           model: DrawingModel,
+                           model_bounds: tuple[float, float, float, float],
+                           target_size_points: tuple[float, float]) -> Image.Image:
+        flattened = self.flatten_card(row_data, model)
+
+        from PIL import Image
+        RENDER_DPI = 300
+        tw_points, th_points = target_size_points
+        tw_pixels = max(1, int(round(tw_points * RENDER_DPI / 72.0)))
+        th_pixels = max(1, int(round(th_points * RENDER_DPI / 72.0)))
+
+        return flattened.resize((tw_pixels, th_pixels), Image.Resampling.LANCZOS)
+
 
 # --- Controller - Application Logic and Interaction ───────────────────────────
 
@@ -1678,7 +1973,6 @@ class DrawingApp: # DrawingApp is now the Controller
              return new_shape.id
         return None
 
-
     def select_shape(self, sid: Optional[Any]):
         if self.model.selected_shape == sid:
             self.root.after(1, lambda: self._post_selection_ui_update(sid))
@@ -1688,28 +1982,7 @@ class DrawingApp: # DrawingApp is now the Controller
         self.root.after(1, lambda: self._post_selection_ui_update(sid))
 
     def _post_selection_ui_update(self, sid: Optional[Any]):
-        """Helper method to perform UI updates after selection drawing (Controller calls View)."""
-        print(f"Controller._post_selection_ui_update: Performing post-selection UI updates for shape ID {sid}.")
-        # Update properties panel for the newly selected shape
-        # The full panel update happens in refresh_all, but this ensures the panel is updated
-        # even if refresh_all is somehow skipped or delayed later.
-        # Let's rely on refresh_all for the main update, but ensure focus is set afterwards.
-        # self.update_properties_panel() # This is called by refresh_all
-
-        # Set canvas focus
-        self.view.canvas.focus_set()
-        print("Controller._post_selection_ui_update: Canvas focus set.")
-
-        # If a shape was selected, try to set focus/selection in the properties treeview
-        if sid is not None:
-             # This might be complex to get the right treeview item ID here.
-             # The update_properties_panel method (called by refresh_all) already
-             # handles setting focus/selection in the treeview if refocus_info is set.
-             # Let's ensure refresh_all is correctly passed refocus_info.
-             # Refocus info is set in handle_property_edit_commit.
-             # For initial selection after creation or click, no specific property needs refocus.
-             pass # Rely on refresh_all and update_properties_panel's refocus logic
-
+        pass
 
     # --- Controller - Listbox and Treeview Event Handlers ---
 
@@ -1954,6 +2227,8 @@ class DrawingApp: # DrawingApp is now the Controller
             self.csv_data_df = None; self.csv_file_path = None; # Clear Controller state
             print(f"Controller.open_drawing: Successfully loaded drawing from {file_path}.")
             # Model.from_dict notifies observers, triggering view.refresh_all
+            # Force an immediate refresh
+            self.view.refresh_all(self.model)            
         except FileNotFoundError: messagebox.showerror("Error", f"File not found:\n{file_path}");
         except json.JSONDecodeError: messagebox.showerror("Error", f"Invalid file format:\n{file_path}");
         except Exception as e: messagebox.showerror("Error", f"An error occurred:\n{e}");
@@ -1978,6 +2253,35 @@ class DrawingApp: # DrawingApp is now the Controller
             self.view.master.title(f"Enhanced Vector Editor - {os.path.basename(file_path)}"); # Update View title
             print(f"Controller._save_to_file: Successfully saved drawing to {file_path}.")
         except Exception as e: messagebox.showerror("Error", f"An error occurred while saving:\n{e}");
+    # --- Controller - Import as Component ---
+
+    def import_component_from_file(self, filepath, max_nesting=2):
+        data = load_json(filepath)
+        component = parse_component_data(data, current_depth=0, max_depth=max_nesting)
+        self.model.components.append(component)
+
+    def parse_component_data(data, current_depth, max_depth):
+        if current_depth >= max_depth:
+            return flatten_component_to_image(data)  # return a ShapeModel with the image
+
+        layers = []
+        for layer_data in data["layers"]:
+            if "component" in layer_data:
+                layers.append(parse_component_data(layer_data["component"], current_depth + 1, max_depth))
+            else:
+                layers.append(LayerModel.from_dict(layer_data))
+
+        return ComponentModel(layers)
+
+    def create_component_from_selected_layers(self):
+        selected = self.layer_panel.get_selected_layers()
+        if not selected:
+            return
+        component = ComponentModel(selected)
+        self.model.components.append(component)
+        for layer in selected:
+            self.model.layers.remove(layer)
+        self.refresh_view()
 
 
     # --- Controller - CSV Import and PDF Export ---
@@ -2015,235 +2319,464 @@ class DrawingApp: # DrawingApp is now the Controller
     def _on_export_pdf(self):
         """Handles the PDF export menu action (Controller logic)."""
         print("\nController._on_export_pdf: PDF export initiated.")
-        path = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF files", "*.pdf")]);
-        if not path: print("Controller._on_export_pdf: Export cancelled."); return
 
-        use_card = messagebox.askyesno("Export as Cards?", "Export using standard card size (2.5×3.5 in or 63.5×89 mm)?");
-        width = height = None;
+        # 1) Ask for output file
+        path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf")]
+        )
+        if not path:
+            print("Controller._on_export_pdf: Export cancelled.")
+            return
+
+        # 2) Should we use standard card layout?
+        use_card = messagebox.askyesno(
+            "Export as Cards?",
+            "Export using standard card size (2.5×3.5 in or 63.5×89 mm)?"
+        )
+        width = height = None
         if not use_card:
-            dims = simpledialog.askstring("Component Size", "Enter width and height in inches (e.g. 5,7):");
+            dims = simpledialog.askstring(
+                "Component Size",
+                "Enter width and height in inches (e.g. 5,7):"
+            )
             if dims:
-                try: w_str, h_str = dims.split(","); width, height = float(w_str), float(h_str);
-                except ValueError: messagebox.showerror("Invalid Input", "Please supply two positive numbers separated by a comma."); return
-            else: return # User cancelled
+                try:
+                    w_str, h_str = dims.split(",")
+                    width, height = float(w_str), float(h_str)
+                except ValueError:
+                    messagebox.showerror(
+                        "Invalid Input",
+                        "Please supply two positive numbers separated by a comma."
+                    )
+                    return
+            else:
+                return  # user cancelled
 
-        page_choice = simpledialog.askstring("Page Size", "Choose page size: LETTER or A4", initialvalue="LETTER");
-        if page_choice is None: return
-        page_choice = page_choice.strip().upper();
-        if page_choice not in ['LETTER', 'A4']: messagebox.showerror("Invalid Input", "Page size must be LETTER or A4."); return
+        # 3) Ask page size
+        page_choice = simpledialog.askstring(
+            "Page Size",
+            "Choose page size: LETTER or A4",
+            initialvalue="LETTER"
+        )
+        if page_choice is None:
+            return
+        page_choice = page_choice.strip().upper()
+        if page_choice not in ['LETTER', 'A4']:
+            messagebox.showerror(
+                "Invalid Input",
+                "Page size must be LETTER or A4."
+            )
+            return
 
-        self.export_to_pdf(export_path=path, page=page_choice, use_card=use_card, custom_size=(width, height) if custom_size else None)
+        # 4) If using cards, ask how many per page (8 or 9)
+        cards_per_page = None
+        rotate_flag = False
+        if use_card:
+            answer = simpledialog.askinteger(
+                "Cards Per Page",
+                "How many cards per page? (8 or 9)",
+                initialvalue=9,
+                minvalue=1,
+                maxvalue=9
+            )
+            if answer not in (8, 9):
+                messagebox.showerror(
+                    "Invalid Input",
+                    "Please enter 8 or 9."
+                )
+                return
+            cards_per_page = answer
 
-    def export_to_pdf(self, export_path: str, page: str = 'LETTER',
-                use_card: bool = False, custom_size: Optional[tuple] = None):
-        """Exports the drawing to a PDF file (Controller orchestrates View/Model/Data)."""
-        print(f"\nController.export_to_pdf: Exporting to PDF: {export_path}")
-        try:
-            from reportlab.lib.pagesizes import LETTER, A4
-            from reportlab.lib.units import inch
-            from reportlab.pdfgen import canvas as pdf_canvas
-            from PIL import Image as PILImage
-            import io
+            # On A4 with 8-up, we auto-rotate
+            if cards_per_page == 8 and page_choice == 'A4':
+                rotate_flag = True
 
-            pagesize = LETTER if page == 'LETTER' else A4; pw, ph = pagesize;
-            mx, my = 0.25 * inch, 0.5 * inch; uw, uh = pw - 2 * mx, ph - 2 * my;
+    def export_to_pdf(self,
+                          export_path: str,
+                          page: str = 'LETTER',
+                          use_card: bool = False,
+                          custom_size: Optional[tuple] = None,
+                          cards_per_page: Optional[int] = None,
+                          rotate_card: bool = False):
+            """
+            Exports the drawing to a PDF file. For 8-up and 9-up layouts,
+            renders the entire grid as a single image centered on the page.
+            Otherwise, uses a fallback layout fitting cards individually.
+            """
+            print(f"\nController.export_to_pdf: Exporting to PDF: {export_path}")
+            try:
+                from reportlab.lib.pagesizes import LETTER, A4
+                from reportlab.lib.units import inch
+                from reportlab.pdfgen import canvas as pdf_canvas
+                from PIL import Image as PILImage, ImageDraw
+                import io
+                import traceback
 
-            cw_init, ch_init = uw, uh
-            if use_card: cw_init, ch_init = (2.5 * inch, 3.5 * inch) if page == 'LETTER' else ((63.5 / 25.4) * inch, (89 / 25.4) * inch);
-            elif custom_size: cw_init, ch_init = custom_size[0] * inch, custom_size[1] * inch;
+                # 1) Page setup
+                pagesize = LETTER if page.upper() == 'LETTER' else A4
+                pw, ph   = pagesize
 
-            cols = int(uw // cw_init) or 1; rows = int(uh // ch_init) or 1; cards_per_page = cols * rows;
-            cw = uw / cols; ch = uh / rows;
+                # No margins for the grid placement - the single image will be centered
+                mx, my = 0, 0 # Margins for the PDF canvas
 
-            pdf = pdf_canvas.Canvas(export_path, pagesize=pagesize);
-            print(f"Controller.export_to_pdf: PDF canvas created. Component size: {cw/inch:.2f}x{ch/inch:.2f} inches.")
+                # Card dimensions in portrait
+                card_portrait_width_inch = 2.5
+                card_portrait_height_inch = 3.5
+                card_portrait_width_pt = card_portrait_width_inch * inch
+                card_portrait_height_pt = card_portrait_height_inch * inch
 
-            # Get data records (Controller accesses its CSV data)
-            records = self.csv_data_df.to_dict('records') if self.csv_data_df is not None else [{}]
-            if not records: records = [{}]; print("Controller.export_to_pdf: No CSV data, exporting one default record.");
+                # DPI for rendering the grid image in pixels
+                RENDER_DPI = 300
 
-            # Get model bounds (Controller accesses Model)
-            model_bounds = self._get_model_bounds();
-            print(f"Controller.export_to_pdf: Model bounds: {model_bounds}")
+                # 2) Layout based on cards_per_page
+                cols = 0
+                rows = 0
+                # Dimensions of the grid in points (for PDF placement)
+                total_grid_width_pt = 0
+                total_grid_height_pt = 0
+                # Dimensions of the grid in pixels (for PIL rendering)
+                total_grid_width_px = 0
+                total_grid_height_px = 0
 
-            for page_start_record_idx in range(0, len(records), cards_per_page):
-                page_records = records[page_start_record_idx : page_start_record_idx + cards_per_page];
-                for i, row in enumerate(page_records):
-                    col_idx = i % cols; row_idx = i // cols;
-                    x_offset_on_page = mx + col_idx * cw; y_offset_on_page = ph - my - (row_idx + 1) * ch;
+                if cards_per_page == 9:
+                    cols, rows  = 3, 3
+                    # Total grid dimensions in points
+                    total_grid_width_pt = cols * card_portrait_width_pt
+                    total_grid_height_pt = rows * card_portrait_height_pt
+                    # Total grid dimensions in pixels
+                    total_grid_width_px = int(round(total_grid_width_pt * RENDER_DPI / 72.0))
+                    total_grid_height_px = int(round(total_grid_height_pt * RENDER_DPI / 72.0))
+                    rotate_card = False # No rotation for 9-up
+                    print("Controller.export_to_pdf: 9-up → 3×3 grid, 2.5x3.5 inch portrait cards, render as single image.")
 
-                    # --- Render the merged card image using PIL (Controller orchestrates View/Model/Data) ---
-                    # Controller prepares data and calls View method for rendering
-                    card_img = self.view.render_merged_card(row, self.model, model_bounds, (int(cw), int(ch))) # View renders
+                elif cards_per_page == 8:
+                    cols, rows  = 2, 4 # 2 columns, 4 rows for portrait page on a portrait page
+                     # Card dimensions on the page (rotated) are 3.5x2.5
+                    card_landscape_width_pt = card_portrait_height_inch * inch # 3.5 inches
+                    card_landscape_height_pt = card_portrait_width_inch * inch # 2.5 inches
+                    # Total grid dimensions in points
+                    total_grid_width_pt = cols * card_landscape_width_pt
+                    total_grid_height_pt = rows * card_landscape_height_pt
+                     # Total grid dimensions in pixels
+                    total_grid_width_px = int(round(total_grid_width_pt * RENDER_DPI / 72.0))
+                    total_grid_height_px = int(round(total_grid_height_pt * RENDER_DPI / 72.0))
+                    rotate_card = True # Explicitly set rotate for 8-up
+                    print("Controller.export_to_pdf: 8-up → 2×4 grid, 3.5x2.5 inch landscape cells (for rotated cards), render as single image.")
 
-                    if card_img.mode == 'RGBA': background = Image.new('RGB', card_img.size, (255, 255, 255)); background.paste(card_img, mask=card_img.split()[3]); card_img = background;
-                    elif card_img.mode != 'RGB': card_img = card_img.convert('RGB');
+                # 3) PDF canvas
+                pdf = pdf_canvas.Canvas(export_path, pagesize=pagesize)
 
-                    buf = io.BytesIO(); card_img.save(buf, format='PNG'); buf.seek(0);
-                    pil_img_for_reportlab = PILImage.open(buf);
+                # 4) Records
+                records = (self.csv_data_df.to_dict('records')
+                           if self.csv_data_df is not None else [{}])
+                if not records:
+                    records = [{}]
+                    print("Controller.export_to_pdf: No CSV data → blank card")
 
-                    pdf.drawInlineImage(pil_img_for_reportlab, x_offset_on_page, y_offset_on_page, width=cw, height=ch, preserveAspectRatio=True);
+                # 5) Model bounds
+                model_bounds = self.model.get_model_bounds()
 
-                if page_start_record_idx + cards_per_page < len(records): pdf.showPage();
+                # 6) Render and draw pages
+                if cards_per_page in [8, 9]:
+                     # --- Render the entire grid as a single image ---
+                     if total_grid_width_px <= 0 or total_grid_height_px <= 0:
+                          print("Controller.export_to_pdf: Calculated grid pixel dimensions are zero or negative.")
+                          # Fallback to drawing individual cards if grid size is invalid
+                          cards_per_page = None # Forces fallback logic
+                     else:
+                         for start in range(0, len(records), cards_per_page):
+                             page_recs = records[start:start + cards_per_page]
 
-            pdf.save(); messagebox.showinfo('Export PDF', f'Exported {len(records)} item(s) to\n{export_path}');
-        except ImportError: messagebox.showerror("Missing Dependency", "Please install ReportLab (`pip install reportlab`).");
-        except Exception as e: messagebox.showerror("Export Error", f"An error occurred during PDF export:\n{e}");
+                             # Create a large canvas for the entire grid page in pixels
+                             grid_image = PILImage.new('RGBA', (total_grid_width_px, total_grid_height_px), (255, 255, 255, 0))
+                             # No need for ImageDraw on the grid_image unless adding grid lines later
 
-    # --- Controller Helpers ---
+                             # Calculate pixel dimensions for a single card based on RENDER_DPI
+                             single_card_render_width_px = int(round(card_portrait_width_pt * RENDER_DPI / 72.0))
+                             single_card_render_height_px = int(round(card_portrait_height_pt * RENDER_DPI / 72.0))
 
-    def _get_model_bounds(self) -> tuple:
-        """Calculates the bounding box of all shapes in the model (Controller helper)."""
-        xs, ys = [], []
-        for layer in self.model.layers:
-            for shape in layer.shapes.values():
-                min_x, min_y, max_x, max_y = shape.get_bbox
-                xs.extend([min_x, max_x]); ys.extend([min_y, max_y]);
-
-        if not xs or not ys: return (0, 0, 100, 100);
-        return (min(xs), min(ys), max(xs), max(ys))
+                             # Calculate pixel dimensions of a cell in the grid
+                             cell_width_px = int(round(total_grid_width_pt / cols * RENDER_DPI / 72.0))
+                             cell_height_px = int(round(total_grid_height_pt / rows * RENDER_DPI / 72.0))
 
 
-    # --- View/Drawing - Rendering for Export (Now in View) ---
-    # Moved render_merged_card to DrawingView
+                             for idx, row in enumerate(page_recs):
+                                 # Calculate position within the grid (0-indexed, top-left is 0,0)
+                                 col_idx = idx % cols
+                                 row_idx_in_grid = idx // cols
 
-class OffsetDraw: # Keep OffsetDraw, used by View for PIL drawing
-    # ... (same as before)
-     def __init__(self, draw, dx, dy):
-        self.draw = draw
-        self.dx = dx
-        self.dy = dy
+                                 # Render a single card
+                                 # The target size for rendering content is always the portrait card size
+                                 single_card_image = self.view.render_merged_card(
+                                      row, self.model, model_bounds,
+                                      (card_portrait_width_pt, card_portrait_height_pt) # Target size for rendering content in points
+                                 )
 
-     def __getattr__(self, attr):
-        orig = getattr(self.draw, attr)
-        if callable(orig):
-            def wrapped(*args, **kwargs):
-                shifted_args = self._shift_args(args)
-                return orig(*shifted_args, **kwargs)
-            return wrapped
-        return orig
+                                 # Rotate the single card image if needed for 8-up layout
+                                 if rotate_card:
+                                     single_card_image = rotate_image_90_clockwise(single_card_image)
+                                     # After rotation, the pixel dimensions of single_card_image
+                                     # should correspond to the landscape size (3.5x2.5 inches at RENDER_DPI)
 
-     def _shift_args(self, args):
-        def shift(val):
-            if isinstance(val, tuple) and len(val) == 2: return (val[0] + self.dx, val[1] + self.dy)
-            elif isinstance(val, list): return [shift(p) for p in val]
-            elif isinstance(val, (int, float, str, bool, type(None))): return val
-            return val
-        return tuple(shift(p) for p in args)
+                                 # Calculate the pixel position on the grid_image where this card should be pasted
+                                 # Paste position is top-left corner of the cell in pixels
+                                 paste_x_px = col_idx * cell_width_px
+                                 paste_y_px = row_idx_in_grid * cell_height_px
+
+
+                                 # Paste the rendered single card image onto the grid image
+                                 # Ensure the single_card_image dimensions match the cell dimensions in pixels if rotated.
+                                 # If not rotated, they match the portrait card dimensions in pixels.
+                                 # The pasting logic should handle potential size mismatches if scaling is needed here.
+                                 # However, render_merged_card should output at the requested size in points * RENDER_DPI/72.
+                                 # Let's ensure the rendered single card size matches the cell size before pasting.
+
+                                 # Re-rendering single card with target size matching the *cell* size in points
+                                 target_single_card_pt = (card_portrait_width_pt, card_portrait_height_pt)
+                                 if rotate_card:
+                                      target_single_card_pt = (card_landscape_width_pt, card_landscape_height_pt) # Render at landscape size for 8-up
+
+                                 single_card_image = self.view.render_merged_card(
+                                      row, self.model, model_bounds,
+                                      target_single_card_pt # Target size in points for the cell
+                                 )
+
+                                 # Now single_card_image has pixel dimensions corresponding to target_single_card_pt at RENDER_DPI
+
+                                 # Rotate if needed (applied after rendering to target cell size)
+                                 if rotate_card:
+                                      single_card_image = rotate_image_90_clockwise(single_card_image)
+                                      # After rotation, pixel dims match landscape size at RENDER_DPI
+
+
+                                 # Paste the rendered single card image onto the grid image
+                                 # The size of single_card_image in pixels should now match cell_width_px x cell_height_px if rotated,
+                                 # or portrait_width_px x portrait_height_px if not rotated.
+                                 # The paste position is the top-left of the cell.
+                                 # If not rotated (9-up), paste a portrait card into a portrait cell.
+                                 # If rotated (8-up), paste a rotated landscape card into a landscape cell.
+
+                                 # Ensure the image being pasted has the correct pixel dimensions for the cell
+                                 # If the rendered single card image's pixel size doesn't exactly match cell_width_px/cell_height_px,
+                                 # we should resize it before pasting to avoid distortion or gaps.
+
+                                 expected_paste_width_px = cell_width_px
+                                 expected_paste_height_px = cell_height_px
+
+                                 if single_card_image.width != expected_paste_width_px or single_card_image.height != expected_paste_height_px:
+                                      print(f"Controller.export_to_pdf: Resizing single card image for pasting: {single_card_image.size} -> ({expected_paste_width_px}, {expected_paste_height_px})")
+                                      single_card_image = single_card_image.resize((expected_paste_width_px, expected_paste_height_px), Image.Resampling.LANCZOS)
+
+
+                                 grid_image.paste(single_card_image, (paste_x_px, paste_y_px))
+
+
+                             # --- Embed the finished grid image onto the PDF page ---
+                             # Convert grid_image to RGB for embedding in PDF
+                             if grid_image.mode == 'RGBA':
+                                bg = PILImage.new('RGB', grid_image.size, (255,255,255))
+                                bg.paste(grid_image, mask=grid_image.split()[3])
+                                grid_image = bg
+                             elif grid_image.mode != 'RGB':
+                                grid_image = grid_image.convert('RGB')
+
+                             buf = io.BytesIO()
+                             grid_image.save(buf, format='PNG')
+                             buf.seek(0)
+
+                             # Calculate position to center the grid image on the PDF page
+                             center_x_page = pw / 2
+                             center_y_page = ph / 2
+
+                             # Bottom-left position for embedding the grid image
+                             embed_x = center_x_page - total_grid_width_pt / 2
+                             embed_y = center_y_page - total_grid_height_pt / 2
+
+                             # Embed the grid image. ReportLab will scale the pixel image
+                             # to fit the specified width and height in points.
+                             pdf.drawInlineImage(
+                                PILImage.open(buf),
+                                embed_x, embed_y,
+                                width=total_grid_width_pt, # Embed at the total grid width in points
+                                height=total_grid_height_pt, # Embed at the total grid height in points
+                                preserveAspectRatio=False # Force image to fill the space
+                             )
+
+
+                             if start + cards_per_page < len(records):
+                                 pdf.showPage()
+
+                else:
+                    # --- Fallback: Draw individual cards directly onto the PDF ---
+                    # This is the previous logic for fitting as many as possible
+
+                    # Calculate cell size by fitting to the page
+                    cell_width, cell_height = None, None
+                    fallback_cols, fallback_rows = 0, 0
+
+                    if use_card:
+                        cell_width_init, cell_height_init = (card_portrait_width_pt, card_portrait_height_pt)
+                    elif custom_size:
+                        cell_width_init, cell_height_init = (custom_size[0]*inch, custom_size[1]*inch)
+                    else:
+                        cell_width_init, cell_height_init = (pw, ph) # Fit one per page
+
+                    fallback_cols = max(int(pw // cell_width_init), 1)
+                    fallback_rows = max(int(ph // cell_height_init), 1)
+                    fallback_cards_per_page = fallback_cols * fallback_rows
+
+                    cell_width, cell_height = pw/fallback_cols, ph/fallback_rows # Recalculate cell size based on fitted grid
+
+
+                    print(f"Controller.export_to_pdf: auto-fit fallback → {fallback_cols}×{fallback_rows} = {fallback_cards_per_page}")
+
+                    for start in range(0, len(records), fallback_cards_per_page):
+                        page_recs = records[start:start + fallback_cards_per_page]
+                        for idx, row in enumerate(page_recs):
+                            # Calculate position in the grid (0-indexed, top-left is 0,0)
+                            col_idx = idx % fallback_cols
+                            row_idx_in_grid = idx // fallback_cols
+
+                            # Calculate drawing position on the PDF page (bottom-left corner of the cell)
+                            # Position from top-left of the page with no margins in this mode
+                            x0 = col_idx * cell_width
+                            y0 = ph - (row_idx_in_grid + 1) * cell_height
+
+
+                            # Determine the target rendering size for a single card in points
+                            # For the fallback, render at the calculated cell size
+                            target_render_pt = (cell_width, cell_height)
+
+                            # Render a single card image
+                            single_card_image = self.view.render_merged_card(
+                                 row, self.model, model_bounds,
+                                 target_render_pt # Target size for rendering content in points (cell size)
+                            )
+
+                            # No rotation in fallback mode
+                            # No need to paste onto a grid image, draw directly
+
+                            # Convert to RGB for embedding
+                            if single_card_image.mode == 'RGBA':
+                                bg = PILImage.new('RGB', single_card_image.size, (255,255,255))
+                                bg.paste(single_card_image, mask=single_card_image.split()[3])
+                                single_card_image = bg
+                            elif single_card_image.mode != 'RGB':
+                                 single_card_image = single_card_image.convert('RGB')
+
+                            buf = io.BytesIO()
+                            single_card_image.save(buf, format='PNG')
+                            buf.seek(0)
+
+                            # Embed the single card image
+                            pdf.drawInlineImage(
+                                PILImage.open(buf),
+                                x0, y0,
+                                width=cell_width,
+                                height=cell_height,
+                                preserveAspectRatio=False # Force fill the cell
+                            )
+
+                        if start + fallback_cards_per_page < len(records):
+                            pdf.showPage()
+
+
+                # 7) Save
+                pdf.save()
+                messagebox.showinfo('Export PDF',
+                                    f'Exported {len(records)} card(s) to\n{export_path}')
+
+            except ImportError:
+                messagebox.showerror("Missing Dependency",
+                                     "Please install ReportLab (`pip install reportlab`).")
+            except Exception as e:
+                # Print the full traceback for debugging
+                traceback.print_exc()
+                messagebox.showerror("Export Error", f"An error occurred during PDF export:\n{e}\nCheck console for details.")
+
+# Keep the rotate_image_90_clockwise function as is
+def rotate_image_90_clockwise(img: Image) -> Image:
+    """Returns a new image rotated 90 degrees clockwise."""
+    # Use ROTATE_270 for clockwise rotation
+    return img.transpose(Image.Transpose.ROTATE_270)
 
 # Add render_merged_card to DrawingView
-setattr(DrawingView, 'render_merged_card', lambda self, csv_row, model, bounds, size: self._render_merged_card(csv_row, model, bounds, size))
-setattr(DrawingView, '_render_merged_card', lambda self, csv_row, model, bounds, size: _render_merged_card_impl(self, csv_row, model, bounds, size))
 
-def _render_merged_card_impl(self_view, csv_row: Dict[str, Any], model: DrawingModel, bounds: tuple, size: tuple):
-    """
-    Implementation of render_merged_card, placed outside class for clarity but
-    conceptually part of DrawingView.
-    Renders a single component/card image using PIL.
-    """
-    print(f"\nView._render_merged_card: Rendering card for CSV row: {csv_row}. Target size: {size}")
-
-    x1, y1, x2, y2 = bounds
-    ow, oh = int(x2 - x1), int(y2 - y1)
-    if ow <= 0 or oh <= 0:
-        print("View._render_merged_card: Model bounds result in zero or negative dimensions. Creating small default image.")
-        return Image.new('RGBA', size, (255, 255, 255, 0))
-
-    canvas_img = Image.new('RGBA', (ow, oh), (255,255,255,0))
-    draw = ImageDraw.Draw(canvas_img)
-    offset_draw = OffsetDraw(draw, -x1, -y1)
-
-    print("View._render_merged_card: Merging data and drawing shapes.")
-    for layer in model.layers: # View accesses Model data
-        for sid in sorted(layer.shapes.keys()):
-            shape = layer.shapes[sid]
-
-            # --- Data Merging (View prepares data for rendering, could also be Controller) ---
-            # Merging data here before drawing - View/Rendering responsibility
-            if shape.name.startswith('@'):
-                header = shape.name
-                val = csv_row.get(header, '')
-
-                if shape.container_type == 'Text':
-                    shape.content = str(val)
-                elif shape.container_type == 'Image':
-                    if val:
-                        try: shape.content = Image.open(val).convert('RGBA');
-                        except Exception as e: print(f"!! View: Failed to load image for shape '{header}' from path '{val}': {e}"); shape.content = None
-                    else: shape.content = None
-
-            # --- Drawing ---
-            # View calls its own drawing method
-            self_view._draw_shape_on_pil(shape, offset_draw, canvas_img) # Use self_view to access View methods
-
-
-    print(f"View._render_merged_card: Scaling rendered image to {size}.")
-    if size[0] <= 0 or size[1] <= 0:
-         print("View._render_merged_card: Target size is invalid. Returning unscaled image.")
-         return canvas_img
-
-    final_card_img = canvas_img.resize(size, Image.Resampling.LANCZOS)
-    print("View._render_merged_card: Card rendering complete.")
-    return final_card_img
-
-# ---------- Main Execution Block ----------
-if __name__=='__main__':
+if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Enhanced Vector Editor')
     parser.add_argument('file', nargs='?', help='JSON file to open')
     parser.add_argument('-i','--import',dest='csv_path',help='CSV to import')
     parser.add_argument('-e','--export_pdf',dest='export_pdf',metavar='OUT.pdf',help='Export to PDF and exit')
-    parser.add_argument('-c','--card',action='store_true',dest='use_card',help='Use card layout')
+    parser.add_argument('-c','--cards',type=int,choices=[8,9],help="Number of cards per page")
+    parser.add_argument('--use-card', action='store_true', help='Render cards using card layout')
     parser.add_argument('-p','--page_size',choices=['letter','a4'],default='letter',dest='page_size',help='PDF page size')
     parser.add_argument('-s','--size',dest='custom_size',metavar='W,H',help='Custom component size in inches (W,H)')
-    args=parser.parse_args()
+    args = parser.parse_args()
 
-    root=tk.Tk()
+    # Initialize Tk
+    root = tk.Tk()
     root.lift()
 
-    missing=[]
-    try: Image.new('RGB',(1,1)); from PIL import ImageTk, ImageDraw, ImageFont
-    except ImportError: missing.append('Pillow')
-    try: import pandas as pd; pd.DataFrame()
-    except ImportError: missing.append('pandas')
-    try: import reportlab
-    except ImportError: missing.append('reportlab')
+    # Check only for truly fatal GUI / library misses;
+    # we no longer pre‐check for reportlab here.
+    missing = []
+    try:
+        Image.new('RGB',(1,1))
+        from PIL import ImageTk, ImageDraw, ImageFont
+    except ImportError:
+        missing.append('Pillow')
+    try:
+        import pandas as pd
+        pd.DataFrame()
+    except ImportError:
+        missing.append('pandas')
 
     if missing:
-        messagebox.showerror('Missing Dependencies',f"Install the following packages: {', '.join(missing)}")
-        root.destroy(); exit()
+        messagebox.showerror('Missing Dependencies',
+                             f"Install the following packages: {', '.join(missing)}")
+        root.destroy()
+        exit()
 
+    # Parse custom size if given
     custom_size_tuple = None
     if args.custom_size:
-        try: w_str, h_str = args.custom_size.split(','); custom_size_tuple = (float(w_str), float(h_str));
-        except ValueError: messagebox.showerror("Invalid Argument", "Invalid custom size format. Use W,H (e.g., 5,7)."); root.destroy(); exit();
+        try:
+            w_str, h_str = args.custom_size.split(',')
+            custom_size_tuple = (float(w_str), float(h_str))
+        except ValueError:
+            messagebox.showerror("Invalid Argument",
+                                 "Invalid custom size format. Use W,H (e.g., 5,7).")
+            root.destroy()
+            exit()
 
-
-    # --- CORRECTED MAIN BLOCK ---
-
-    # Instantiate the Controller (which now creates the Model and View internally)
-    # This ensures only ONE instance of each is created and wired together.
+    # Instantiate and wire up Controller / View / Model
     controller = DrawingApp(root)
 
+    # Handle file & CSV import
+    if args.file:
+        controller.open_drawing(args.file)
+    if args.csv_path:
+        controller.import_csv(args.csv_path)
 
-    # Handle command line arguments using the controller instance
-    if args.file: controller.open_drawing(args.file)
-    if args.csv_path: controller.import_csv(args.csv_path)
-
+    # If export requested, call export_to_pdf (ReportLab import error will be caught there)
     if args.export_pdf:
         use_card = args.use_card
-        if args.use_card and args.custom_size: print("Warning: Both --card and --size specified. Using --size."); use_card = False;
-        elif args.custom_size: use_card = False;
+        if args.use_card and custom_size_tuple:
+            print("Warning: Both --use-card and --size specified. Using --size.")
+            use_card = False
+        elif custom_size_tuple:
+            use_card = False
 
         controller.export_to_pdf(
-            export_path=args.export_pdf,
-            page=args.page_size.upper(),
-            use_card=use_card,
-            custom_size=custom_size_tuple
+            export_path     = args.export_pdf,
+            page            = args.page_size.upper(),
+            use_card        = use_card,
+            custom_size     = custom_size_tuple,
+            cards_per_page  = args.cards,
+            rotate_card     = (args.cards == 8 and args.page_size.upper() == 'A4')
         )
         root.destroy()
     else:
-         # Initial refresh AFTER View and Model are created and wired by Controller.__init__
-         # This ensures the View draws the initial state correctly.
-         controller.view.refresh_all(controller.model) # Trigger the first draw
-
-         root.mainloop()
+        controller.view.refresh_all(controller.model)
+        root.mainloop()
