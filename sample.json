@@ -1,0 +1,148 @@
+{
+    "layers": [
+        {
+            "name": "Background",
+            "shapes": {
+                "0": {
+                    "shape_type": "rectangle",
+                    "coords": [
+                        0,
+                        0,
+                        280,
+                        380
+                    ],
+                    "name": "bg",
+                    "container_type": "Image",
+                    "text": "",
+                    "path": "bg.jpg",
+                    "color": "black",
+                    "line_width": 1
+                }
+            }
+        },
+        {
+            "name": "Layer 3",
+            "shapes": {
+                "7": {
+                    "shape_type": "rectangle",
+                    "coords": [
+                        40,
+                        124,
+                        240,
+                        264
+                    ],
+                    "name": "@image",
+                    "container_type": "Image",
+                    "text": "",
+                    "path": "",
+                    "color": "black",
+                    "line_width": 0
+                }
+            }
+        },
+        {
+            "name": "Layer 1",
+            "shapes": {
+                "1": {
+                    "shape_type": "rectangle",
+                    "coords": [
+                        19,
+                        33,
+                        179,
+                        73
+                    ],
+                    "name": "@name",
+                    "container_type": "Text",
+                    "text": "",
+                    "path": "",
+                    "color": "black",
+                    "line_width": 0
+                },
+                "2": {
+                    "shape_type": "rectangle",
+                    "coords": [
+                        20,
+                        77,
+                        80,
+                        94
+                    ],
+                    "name": "Power",
+                    "container_type": "Text",
+                    "text": "Power:",
+                    "path": "",
+                    "color": "black",
+                    "line_width": 0
+                },
+                "3": {
+                    "shape_type": "rectangle",
+                    "coords": [
+                        20,
+                        100,
+                        80,
+                        120
+                    ],
+                    "name": "Fury",
+                    "container_type": "Text",
+                    "text": "Fury:",
+                    "path": "",
+                    "color": "black",
+                    "line_width": 0
+                }
+            }
+        },
+        {
+            "name": "Layer 3",
+            "shapes": {
+                "4": {
+                    "shape_type": "rectangle",
+                    "coords": [
+                        82,
+                        55,
+                        134,
+                        100
+                    ],
+                    "name": "@power",
+                    "container_type": "Text",
+                    "text": "",
+                    "path": "",
+                    "color": "black",
+                    "line_width": 0
+                },
+                "5": {
+                    "shape_type": "rectangle",
+                    "coords": [
+                        86,
+                        95,
+                        146,
+                        132
+                    ],
+                    "name": "@fury",
+                    "container_type": "Text",
+                    "text": "",
+                    "path": "",
+                    "color": "black",
+                    "line_width": 0
+                },
+                "6": {
+                    "shape_type": "rectangle",
+                    "coords": [
+                        40,
+                        261,
+                        240,
+                        361
+                    ],
+                    "name": "@text",
+                    "container_type": "Text",
+                    "text": "",
+                    "path": "",
+                    "color": "black",
+                    "line_width": 1
+                }
+            }
+        }
+    ],
+    "selected_layer_idx": 3,
+    "grid_size": 20,
+    "grid_visible": true,
+    "snap_to_grid": true
+}

@@ -1,0 +1,32 @@
+@name,@type,@power,@fury,@text,@image,@bg
+Ground Pound,Combat,4,1,"When attacking, discard 1 Debris Shield to deal +2 damage to the District.\n",ground_pound.jpg,bg.jpg
+Tremor,Combat,3,2,"When attacking, all other Kaiju in the District take 1 damage.\n",stomp.jpg,bg.jpg
+Stone Throw,Combat,2,3,"When attacking, reduce target Kaiju's Power by 2 until the end of the round.\n",,bg.jpg
+Quake,Combat,3,2,"When attacking, deal 1 damage to an adjacent District.\n",,bg.jpg
+Rubble Storm,Combat,4,1,"When attacking, discard 1 card from your hand to deal +3 damage to the District.\n",,bg.jpg
+Seismic Charge,Combat,3,2,"When attacking, you may deal damage to a District up to 2 Districts away (if possible).\n",,bg.jpg
+Stone Fist,Combat,2,3,"When attacking, gain 1 Fury until the end of the round.\n",,bg.jpg
+Shatter,Combat,4,1,"When attacking, destroy 1 Debris Shield from target Kaiju.\n",,bg.jpg
+Boulder Toss,Combat,4,1,"When attacking, deal damage to a District, then move it to an adjacent empty space.\n",,bg.jpg
+Groundswell,Combat,3,2,"When attacking, if this District is Agricultural, deal +2 damage.\n",,bg.jpg
+Mountain Fall,Combat,4,1,"When attacking, take 1 damage to deal +4 damage to the District.\n",,bg.jpg
+Rumble,Combat,3,2,"When attacking, deal 1 damage to all other Kaiju involved in the Rumble.\n",,bg.jpg
+Bedrock,Combat,2,3,"When attacking, gain 1 Debris Shield.\n",,bg.jpg
+Avalanche,Combat,4,1,"When attacking, discard 1 Debris Weapon to deal +4 damage to the District.\n",,bg.jpg
+Pulverize,Combat,3,2,"When attacking, this attack cannot be blocked by Debris Shields.\n",,bg.jpg
+Erosion,Action,2,1,Reduce target District's Resilience by 2 until the end of the round.\n,,bg.jpg
+Crevice,Action,1,1,"Draw 2 cards, then discard 1.\n",,bg.jpg
+Fortify,Action,1,2,Gain 2 Power and 2 Fury until the end of the round.\n,,bg.jpg
+Quake Zone,Action,1,3,Deal 1 damage to all other Kaiju in this District.\n,,bg.jpg
+Fault Line,Action,1,4,Destroy target adjacent District. Take 3 damage.\n,,bg.jpg
+Aftershock,Action,1,4,"If this District is Destroyed this turn, deal 3 Collateral Damage instead of usual.\n",,bg.jpg
+Terraform,Action,2,2,"""Once per turn you may change an adjacent District's type to Agricultural. Take 1 damage to also reduce its Resilience by 2.”\n",,bg.jpg
+Spike Eruption,Action,1,3,"""Deal 2 damage to target District. If you do gain 1 Rage.\”\n",,bg.jpg
+Ground Shift, Action,3,1,"\""Move up to 2 Districts.\""\n",,bg.jpg
+Enhanced Plating,Mutation,1,4,Reduce damage taken by 1.\n,,bg.jpg
+Enhanced Plating,Mutation,1,4,Reduce damage taken by 1.\n,,bg.jpg
+Spike Growth,Mutation,2,3,Deal 1 damage to any Kaiju that enters your District.\n,,bg.jpg
+Spike Growth,Mutation,2,3,Deal 1 damage to any Kaiju that enters your District.\n,,bg.jpg
+Ground Adaptation,Mutation,4,1,+1 Power when attacking a District.\n,,bg.jpg
+Ground Adaptation,Mutation,4,1,+1 Power when attacking a District.\n,,bg.jpg
+Terraform,Mutation,5,1,"Once per turn, you may change an adjacent District's type to Agricultural. Take 1 damage to also reduce its Resilience by 2.\n",,bg.jpg
