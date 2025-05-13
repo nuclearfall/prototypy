@@ -110,10 +110,6 @@ class DrawingApp:
         self._build_property_spec()
         print("DrawingApp.__init__: Property handlers and spec built.") # Added print
 
-        # Initial refresh is typically triggered in the main block or after loading
-        # print("DrawingApp.__init__: Initial refresh (if needed elsewhere).")
-        # self.view.refresh_all(self.model)
-
         print("DrawingApp.__init__: Initialization finished.") # Added print
 
     def _build_property_spec(self):
@@ -1213,9 +1209,6 @@ class DrawingApp:
 
     def _raise_window(self):
             self.root.deiconify() # Ensure window is not minimized
-            # self.root.lift() # Remove the immediate lift
-            # self.root.attributes('-topmost', True) # Remove immediate topmost if you added it
-
             # Schedule lift and potentially topmost after a short delay
             self.root.after(100, self._perform_raise) # Delay by 100 milliseconds
 
