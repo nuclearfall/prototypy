@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional, Any # For type hinting
-
+import tkinter as tk
 # Assuming FontManager is in utils/font_manager.py
 from utils.font_manager import FontManager
 
@@ -8,7 +8,7 @@ from utils.font_manager import FontManager
 from shapes.base_shape import Shape # Import the base Shape class
 
 # Assuming geometry utility functions are in utils/geometry.py
-from utils.geometry import _update_coords_if_valid # For updating shape coordinates
+from utils.geometry import _update_coords_if_valid, parse_dimension # For updating shape coordinates
 
 # Assuming constants are in a central constants.py at the root level
 from constants import PPI, GRID_SIZE # Example constant
@@ -97,29 +97,61 @@ class ComponentModel:
         pass
 
 
-# DrawingModel class remains the core data and state manager
 class DrawingModel:
     def __init__(self, font_manager):
         self.font_manager = font_manager
 
+        # ── Detect true screen PPI ──────────────────────────────────────────
+        root = tk.Tk()
+        px_width  = root.winfo_screenwidth()     # e.g. 1920 px
+        mm_width  = root.winfo_screenmmwidth()   # e.g. 509 mm
+        root.destroy()
+        # Convert mm → inches → pixels per inch
+        self.ppi = px_width / (mm_width / 25.4)
+
+        # ── Measurement unit (two-letter code matched by parse_dimension) ───
+        self.measure = "in"   # or "cm", "mm", etc.
+
+        # ── Grid configuration ───────────────────────────────────────────────
+        # How many *full-unit* ticks per unit? (e.g. 1 for inches)
+        self.grid_division      = 1
+
+        # How many *minor* ticks per full-unit? (e.g. 4 → 1/4″)
+        self.grid_subdivision   = 4
+
+        # How many micro-ticks per full-unit? (used if you want 16th-inch)
+        self.grid_subsubdivision = 16
+
+        # How many *mid-ticks* per full-unit? (e.g. 2 → 1/2″)
+        #                                                    ^–– this is your “quarter of full”
+        self.grid_mid_division  = 2
+
+        # ── Compute pixel spacings ─────────────────────────────────────────
+        # 1 full unit (1 in) → px
+        one_unit_px = parse_dimension(f"1 {self.measure}", ppi=self.ppi)
+
+        # Minor tick spacing (e.g. ¼″)
+        self.grid_minor_px = one_unit_px / self.grid_subdivision
+
+        # Mid tick spacing (e.g. ½″) — you can also compute as minor * (subdivision/mid_division)
+        self.grid_mid_px   = one_unit_px / self.grid_mid_division
+
+        # Major tick spacing (e.g. 1″)
+        self.grid_major_px = one_unit_px / self.grid_division
+
+        # ── Other model state ──────────────────────────────────────────────
         self.layers: List[Layer] = []
         self.selected_layer_idx = 0
-        self.ppi = PPI
-        self.measure = "inch"
-        self.grid_division = 2  # This is a default value until provided the ppi of screen by View
-        self.grid_subdivision = 8
-        self.grid_subsubdivision = 16
-        self.grid_size = self.ppi / self.grid_subdivision  # We'll default to subdivision of 1/8"
-        self._shape_map: Dict[Any, Shape] = {}  # Maps all shape IDs to shape objects
-        self.selected_shape: Optional[Any] = None  # ID of the selected shape
-        self.grid_visible = True  # Model state
-        self.snap_to_grid = True  # Model state
+        self._shape_map: Dict[Any, Shape] = {}
+        self.selected_shape: Optional[Any] = None
+        self.grid_visible = True
+        self.snap_to_grid = True
 
-        self._observers: List = []  # Must be initialized before reset()
+        # Observer callbacks
+        self._observers: List[Callable] = []
 
-        # current_file_path is Controller state
+        # Initialize model data
         self.reset()
-
 
     def reset(self):
         self.layers = [Layer("Background", self.font_manager)]
@@ -171,9 +203,6 @@ class DrawingModel:
         self.grid_size = data.get('grid_size', GRID_SIZE)
         self.grid_visible = data.get('grid_visible', True)
         self.snap_to_grid = data.get('snap_to_grid', True)
-        # Ensure ppi and measure are also loaded if saved (your to_dict doesn't include them currently)
-        # self.ppi = data.get('ppi', PPI)
-        # self.measure = data.get('measure', 'inch')
 
 
         self.selected_shape = None # Reset transient state
@@ -239,6 +268,7 @@ class DrawingModel:
         for k, v in self._shape_map.items():
             if v == shape:
                 return k 
+
     ## Currently being used strictly for export but may be handy elsewhere...
     def get_model_bounds(self) -> tuple[int, int, int, int]:
         xs, ys = [], []

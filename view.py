@@ -21,7 +21,7 @@ from shapes.base_shape import Shape
 from model import DrawingModel, Layer# The view observes and displays the model
 
 # Assuming utility functions like _calculate_snap are in utils/geometry.py
-from utils.geometry import calculate_snap # If used in canvas event handlers
+from utils.geometry import calculate_snap, parse_dimension # If used in canvas event handlers
 
 # Assuming constants are in a central constants.py at the root level
 from constants import CANVAS_WIDTH, CANVAS_HEIGHT, PANEL_WIDTH, TOOLBAR_HEIGHT, PPI # Import necessary constants
@@ -291,7 +291,7 @@ class DrawingView(tk.Frame):
         selected_layer_idx = model_state.selected_layer_idx
         grid_visible = model_state.grid_visible # Keep grid_visible check for drawing grid
         selected_shape_id = model_state.selected_shape
-        grid_size = model_state.grid_size # Keep grid_size for drawing grid
+        grid_size = model_state.grid_minor_px
 
 
         # --- 1) Canvas ---
@@ -469,41 +469,79 @@ class DrawingView(tk.Frame):
             print("DrawingView.refresh_all: No shape selected, skipping selection/handle drawing.")
 
     def _draw_grid(self):
-        """Draws the grid on the canvas (View logic)."""
-        grid_size = self.controller.model.grid_size
-        canvas_width, canvas_height = self.canvas.winfo_width(), self.canvas.winfo_height()
+        m = self.controller.model
+        minor = m.grid_minor_px
+        W, H = self.canvas.winfo_width(), self.canvas.winfo_height()
         self.canvas.delete("grid")
-        if self.controller.model.grid_visible and canvas_width > 0 and canvas_height > 0:
-            for x in range(0, canvas_width, grid_size):
-                self.canvas.create_line(x, 0, x, canvas_height, fill='lightgray', tags="grid")
-            for y in range(0, canvas_height, grid_size):
-                self.canvas.create_line(0, y, canvas_width, y, fill='lightgray', tags="grid")
-        print("Now Drawing Ruler")
+        if not m.grid_visible or W<=0 or H<=0:
+            return
+
+        x = 0
+        while x < W:
+            self.canvas.create_line(x, 0, x, H, fill='lightgray', tags="grid")
+            x += minor
+
+        y = 0
+        while y < H:
+            self.canvas.create_line(0, y, W, y, fill='lightgray', tags="grid")
+            y += minor
+
         self._draw_ruler()
 
+
+
     def _draw_ruler(self):
+        """Draws a ruler along the top & left edges with major/mid/minor ticks."""
+        model = self.controller.model
+        W, H = self.canvas.winfo_width(), self.canvas.winfo_height()
         self.horizontal_ruler.delete("all")
         self.vertical_ruler.delete("all")
-        grid_size = self.controller.model.grid_size
-        divisions = self.controller.model.grid_division
-        subdivisions = self.controller.model.grid_subdivision
-        subsub = self.controller.model.grid_subsubdivision
-        canvas_width, canvas_height = self.canvas.winfo_width(), self.canvas.winfo_height()
-        if self.controller.model.grid_visible and canvas_width > 0 and canvas_height > 0:
-            for i, x in enumerate(range(0, canvas_width, grid_size)):
-                if i % divisions == 0 and i % subdivisions != 0:
-                    self.horizontal_ruler.create_line(x, 0, x, self.ruler_size/subdivisions, fill='gray', tags="grid")
-                elif i % subdivisions == 0:
-                    self.horizontal_ruler.create_line(x, 0, x, self.ruler_size/divisions, fill='black', tags="grid")
-                else:
-                    self.horizontal_ruler.create_line(x, 0, x, self.ruler_size/subsub, fill='gray', tags="grid")
-            for i, y in enumerate(range(0, canvas_height, grid_size)):
-                if i % divisions == 0 and i % subdivisions != 0:
-                    self.vertical_ruler.create_line(0, y, self.ruler_size/subdivisions, y, fill='gray', tags="grid")
-                elif i % subdivisions == 0:
-                    self.vertical_ruler.create_line(0, y, self.ruler_size/divisions, y, fill='black', tags="grid")
-                else:
-                    self.vertical_ruler.create_line(0, y, self.ruler_size/subsub, y, fill='gray', tags="grid")
+        if not model.grid_visible or W <= 0 or H <= 0:
+            return
+
+        minor_px = model.grid_minor_px    # e.g. ¼" in pixels (~18px)
+        major_px = model.grid_major_px    # e.g. 1" in pixels (~72px)
+        subdivision = model.grid_subdivision        # total minor ticks per unit (e.g. 4)
+        mid_division = model.grid_mid_division      # mid-tick count per unit (e.g. 2 for half-inch)
+
+        # Compute how many minor steps between mid-tick and full-tick
+        mid_interval = subdivision // mid_division  # e.g. 4//2 = 2
+
+        # Lengths for ticks
+        full_len  = self.ruler_size      # major (1 unit)
+        mid_len   = self.ruler_size * 0.6
+        minor_len = self.ruler_size * 0.3
+
+        # Horizontal ruler
+        i = 0
+        x = 0.0
+        while x <= W:
+            if abs((i * minor_px) % major_px) < 1e-6:
+                length = full_len
+            elif (i % mid_interval) == 0:
+                length = mid_len
+            else:
+                length = minor_len
+
+            self.horizontal_ruler.create_line(x, 0, x, length, fill='black', tags="grid")
+            x += minor_px
+            i += 1
+
+        # Vertical ruler
+        i = 0
+        y = 0.0
+        while y <= H:
+            if abs((i * minor_px) % major_px) < 1e-6:
+                length = full_len
+            elif (i % mid_interval) == 0:
+                length = mid_len
+            else:
+                length = minor_len
+
+            self.vertical_ruler.create_line(0, y, length, y, fill='black', tags="grid")
+            y += minor_px
+            i += 1
+
 
     def _clear_shape_drawing_on_canvas(self, shape_id):
         """Clears all canvas items and PhotoImage references associated with a shape (View logic)."""
@@ -692,7 +730,10 @@ class DrawingView(tk.Frame):
               self.canvas.delete(self._preview_shape_id)
               self._preview_shape_id = None # Clear the View state
 
+
     def _update_properties_panel(self, selected_shape: Optional[Shape], refocus_info=None):
+        if selected_shape is None:
+            return 
         """Populates the properties treeview (View logic)."""
         self.props_tree.delete(*self.props_tree.get_children())
         self._tv_item_to_shape_id.clear()
@@ -706,40 +747,54 @@ class DrawingView(tk.Frame):
             ]
             if selected_shape.container_type == "Text":
                 properties_to_display += ["Text", "Font Name", "Font Size", "Font Weight", "Justification"]
-
-            else:  
+            else:
                 properties_to_display.append("Path")
 
             for prop_name in properties_to_display:
                 handler = self.controller.PROPERTY_HANDLERS.get(prop_name)
+
+                # 1) Fetch raw value
                 if prop_name == "ID":
-                    value = selected_shape.sid
+                    raw_value = selected_shape.sid
                 elif prop_name == "Shape Type":
-                    value = selected_shape.shape_type.capitalize()
+                    raw_value = selected_shape.shape_type.capitalize()
                 elif handler and "get" in handler:
-                    value = handler["get"](selected_shape)
+                    raw_value = handler["get"](selected_shape)
                 else:
-                    value = selected_shape.prop_get(self.controller, prop_name)
+                    raw_value = selected_shape.prop_get(self.controller, prop_name)
 
-                if prop_name in ["X", "Y", "Width", "Height", "Line Width"] and value is not None:
-                    value = int(value)
+                display_value = raw_value  # default fallback
 
-                iid = self.props_tree.insert("", "end", values=(prop_name, value))
+                # 2) If it's a dimension field, parse units → px and reformat
+                if prop_name in ["X", "Y", "Width", "Height", "Line Width"] and raw_value is not None:
+                    # raw_value might be a string like "2.5 in" or "126 px", or a number
+                    try:
+                        if isinstance(raw_value, str):
+                            px = parse_dimension(raw_value, self.controller.model.ppi)
+                        else:
+                            # int/float → pixels
+                            px = int(round(raw_value))
+                        display_value = f"{px} px"
+                    except ValueError:
+                        # leave as-is if it can’t be parsed
+                        display_value = raw_value
+
+                # 3) Insert into treeview
+                iid = self.props_tree.insert("", "end", values=(prop_name, display_value))
                 self._tv_item_to_shape_id[iid] = selected_shape.sid
 
+                # 4) Refocus if needed
                 if sid_to_refocus == selected_shape.sid and prop_to_refocus == prop_name:
                     self.props_tree.focus(iid)
                     self.props_tree.selection_set(iid)
                     self.props_tree.see(iid)
 
-        self.props_tree.focus_set()  # Set focus back to the treeview
+        # Ensure the tree has focus so edits are captured
+        self.props_tree.focus_set()
 
-        # --- ADD THIS BLOCK ---
+        # Redraw selection highlight if needed
         if selected_shape:
             self.redraw_shape_and_selection(selected_shape, True)
-        # ---------------------
-
-            # ---------------------
 
     # Methods for inline editing in the properties treeview (View logic)
     def start_editing_treeview_cell(self, event): # Called by Controller

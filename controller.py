@@ -6,7 +6,7 @@ import pandas as pd # For handling CSV data
 import io           # Potentially for in-memory data handling (e.g., image buffers, though might move with PDF)
 import traceback    # For printing detailed error info (especially in export)
 import math
-from typing import Optional, Any, Tuple # For type hinting
+from typing import Optional, Any, Tuple, List, Dict, TYPE_CHECKING
 
 # Tkinter and its modules for UI interaction and dialogs
 import tkinter as tk
@@ -16,15 +16,6 @@ from PIL import Image, ImageTk, ImageDraw # Add ImageDraw here
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 
-# Assuming AppService is in app_service.py at the root level
-
-# Assuming Model is in model.py at the root level
-from model import DrawingModel, Layer # Need DrawingModel, maybe Layer depending on direct interaction
-
-# Assuming View is in view.py at the root level
-from view import DrawingView
-
-# Assuming Shape and its subclasses are in the shapes package
 # Need access to the base Shape class for type hinting and potentially the factory method
 from shapes.base_shape import Shape
 # Need to import specific shape subclasses for creating new shapes in _create_final_shape_object
@@ -34,26 +25,29 @@ from shapes.triangle import Triangle
 from shapes.hexagon import Hexagon
 
 # Assuming utility functions like calculate_snap are in utils/geometry.py
-from utils.geometry import calculate_snap # Or other geometry utils used
+from utils.geometry import calculate_snap, parse_dimension, format_pixel_output, _update_coords_if_valid # Or other geometry utils used
 # Assuming FontManager is accessed via AppService, but might need import if used directly
 # from utils.font_manager import FontManager # Import if you use FontManager directly
-
+from model import DrawingModel, Layer # Import DrawingModel and Layer
+from view import DrawingView # Import DrawingView
 # Assuming constants are in a central constants.py at the root level
 from constants import SHAPE_BUTTONS, CONTAINER_TYPES, SHAPE_TYPES# Import all necessary constants
 
-# If you move the complex PDF export logic to utils/pdf_export.py:
-# from utils.pdf_export import export_drawing_to_pdf # Example function name
+if TYPE_CHECKING:
+    from view import DrawingView # DrawingApp uses DrawingView type hint
+    from model import DrawingModel # DrawingApp uses DrawingModel type hint
+    from utils.font_manager import FontManager # DrawingApp uses FontManager type hint
 
 
 class DrawingApp:
-    def __init__(self, root, font_manager):
+    def __init__(self, root: tk.Tk, model: 'DrawingModel', font_manager: 'FontManager'):
         print("DrawingApp.__init__: Starting initialization.") # Added print
         self.root = root
         self.font_manager = font_manager
 
         print("DrawingApp.__init__: Creating DrawingModel.") # Added print
         # THIS LINE IS CRUCIAL for the 'model' attribute to exist
-        self.model = DrawingModel(self.font_manager)
+        self.model = model
         print("DrawingApp.__init__: DrawingModel created and assigned.") # Added print
 
         print("DrawingApp.__init__: Creating DrawingView.") # Added print
@@ -113,7 +107,7 @@ class DrawingApp:
         print("DrawingApp.__init__: Initialization finished.") # Added print
 
     def _build_property_spec(self):
-        # The Shape.property_spec drives your data‐validation schema
+        # The Shape.property_spec drives your data-validation schema
         Shape.property_spec = {
             "Name":           {"type": "str"},
             "X":              {"type": "float"},
@@ -148,19 +142,28 @@ class DrawingApp:
                     "options": SHAPE_TYPES,
                 },
                 "X": {
-                    "type": int,
-                    "get": lambda s: s.x,
-                    "set": lambda s, v: s.set_x(v)
+                    "type": float,
+                    "get": lambda s: format_pixel_output(s.x, self.model.ppi, self.model.measure),
+                    "set": lambda s, v: self._set_shape_coord(s, 'x', v),
+                    "validate": lambda v: _is_valid_dimension(v, self.model.ppi),
                 },
                 "Y": {
-                    "type": int,
-                    "get": lambda s: s.y,
-                    "set": lambda s, v: s.set_y(v)
+                    "type": float,
+                    "get": lambda s: format_pixel_output(s.y, self.model.ppi, self.model.measure),
+                    "set": lambda s, v: self._set_shape_coord(s, 'y', v),
+                    "validate": lambda v: _is_valid_dimension(v, self.model.ppi),
+                },
+                "Width": {
+                    "type": float,
+                    "get": lambda s: format_pixel_output(s.width, self.model.ppi, self.model.measure),
+                    "set": lambda s, v: self._set_shape_dim(s, 'width', v),
+                    "validate": lambda v: _is_valid_dimension(v, self.model.ppi),
                 },
                 "Height": {
-                    "type": int,
-                    "get": lambda s: s.height,
-                    "set": lambda s, v: s.set_height(v)
+                    "type": float,
+                    "get": lambda s: format_pixel_output(s.height, self.model.ppi, self.model.measure),
+                    "set": lambda s, v: self._set_shape_dim(s, 'height', v),
+                    "validate": lambda v: _is_valid_dimension(v, self.model.ppi),
                 },
                 "Color": {
                     "type": str,
@@ -321,8 +324,8 @@ class DrawingApp:
                  selected_shape_instance = self.model.get_shape(found_shape_id)
                  if selected_shape_instance:
                       self.view.canvas.focus_set() # Ensure canvas has focus for drag events
-                      shape_bbox = selected_shape_instance.get_bbox;
-                      shape_tl_x, shape_tl_y = shape_bbox[0], shape_bbox[1];
+                      shape_bbox = selected_shape_instance.get_bbox # Call the method
+                      shape_tl_x, shape_tl_y = shape_bbox[0], shape_bbox[1]
 
                       # Calculate and store the offset from the shape's top-left to the RAW click position
                       self.raw_drag_offset = (raw_click_x - shape_tl_x, raw_click_y - shape_tl_y)
@@ -407,7 +410,7 @@ class DrawingApp:
 
 
                   # Get the current dimensions from the shape's bounding box
-                  current_bbox = selected_shape_instance.get_bbox
+                  current_bbox = selected_shape_instance.get_bbox # Call the method
                   width = current_bbox[2] - current_bbox[0]
                   height = current_bbox[3] - current_bbox[1]
 
@@ -429,7 +432,7 @@ class DrawingApp:
                   # which should align the dragged corner to the grid.
                   min_size = 5
                   # Get the fixed corner (top-left of the original bbox)
-                  x1_bbox, y1_bbox, x2_bbox, y2_bbox = selected_shape_instance.get_bbox
+                  x1_bbox, y1_bbox, x2_bbox, y2_bbox = selected_shape_instance.get_bbox # Call the method
                   fx, fy = min(x1_bbox, x2_bbox), min(y1_bbox, y2_bbox) # Fixed top-left
 
                   # Use the current snapped drag position for the new bottom-right
@@ -469,39 +472,39 @@ class DrawingApp:
         # Use the dedicated state variable to ensure we are in the correct mode
         if self.is_drawing_new_shape and self.current_tool:
             print("Controller.on_canvas_release: Entering new shape creation block.")
-            min_dim = 5; # Minimum dimension for a new shape
+            min_dim_px = parse_dimension("5px", self.model.ppi)
 
             # Ensure that the start and end points are not too close to form a tiny shape
-            effective_width = abs(final_x - self.start_x);
-            effective_height = abs(final_y - self.start_y);
+            effective_width = abs(final_x - self.start_x)
+            effective_height = abs(final_y - self.start_y)
 
             # Adjust final_x and final_y if the dimensions are too small
             adjusted_final_x = final_x
             adjusted_final_y = final_y
 
-            # If width is less than min_dim, adjust final_x
-            if effective_width < min_dim:
-                print(f"Controller.on_canvas_release: Width {effective_width} is less than min_dim {min_dim}. Adjusting final_x.")
-                # Adjust final_x to be min_dim away from start_x in the direction of drag
-                # If final_x is greater than start_x, add min_dim; otherwise subtract min_dim.
+            # If width is less than min_dim_px, adjust final_x
+            if effective_width < min_dim_px:
+                print(f"Controller.on_canvas_release: Width {effective_width} is less than min_dim {min_dim_px}. Adjusting final_x.")
+                # Adjust final_x to be min_dim_px away from start_x in the direction of drag
+                # If final_x is greater than start_x, add min_dim_px; otherwise subtract min_dim_px.
                 # Handle the case where they are the same (click without drag)
-                adjusted_final_x = self.start_x + (min_dim if final_x >= self.start_x else -min_dim)
+                adjusted_final_x = self.start_x + (min_dim_px if final_x >= self.start_x else -min_dim_px)
 
 
-            # If height is less than min_dim, adjust final_y
-            if effective_height < min_dim:
-                 print(f"Controller.on_canvas_release: Height {effective_height} is less than min_dim {min_dim}. Adjusting final_y.")
-                 # Adjust final_y to be min_dim away from start_y in the direction of drag
-                 # If final_y is greater than start_y, add min_dim; otherwise subtract min_dim.
+            # If height is less than min_dim_px, adjust final_y
+            if effective_height < min_dim_px:
+                 print(f"Controller.on_canvas_release: Height {effective_height} is less than min_dim {min_dim_px}. Adjusting final_y.")
+                 # Adjust final_y to be min_dim_px away from start_y in the direction of drag
+                 # If final_y is greater than start_y, add min_dim_px; otherwise subtract min_dim_px.
                  # Handle the case where they are the same (click without drag)
-                 adjusted_final_y = self.start_y + (min_dim if final_y >= self.start_y else -min_dim)
+                 adjusted_final_y = self.start_y + (min_dim_px if final_y >= self.start_y else -min_dim_px)
 
             # Special case: If both dimensions were zero (a simple click, no drag)
             # Create a small square shape at the start position
             if effective_width == 0 and effective_height == 0:
-                 print(f"Controller.on_canvas_release: Both dimensions were zero (click). Creating min_dim square.")
-                 adjusted_final_x = self.start_x + min_dim
-                 adjusted_final_y = self.start_y + min_dim
+                 print(f"Controller.on_canvas_release: Both dimensions were zero (click). Creating min_dim_px square.")
+                 adjusted_final_x = self.start_x + min_dim_px
+                 adjusted_final_y = self.start_y + min_dim_px
 
 
             print(f"Controller.on_canvas_release: Adjusted final coordinates for shape creation: ({adjusted_final_x}, {adjusted_final_y}). Start coordinates: ({self.start_x}, {self.start_y})")
@@ -569,6 +572,102 @@ class DrawingApp:
 
 
     # --- Helper method to create final shape object ---
+    def _set_shape_coord(self, shape: Shape, coord_name: str, value_str: str):
+        """Parses input string for X or Y, converts to pixels, and updates shape coordinates via model."""
+        # Use the imported utility function
+        pixel_value = parse_dimension(value_str, self.model.ppi) #
+
+        # Check if parsing was successful
+        if pixel_value is None:
+            # Error message shown by messagebox in commit method
+            return False # Indicate failure
+
+        # Get current coordinates to create the new_coords list
+        x1, y1, x2, y2 = shape.get_bbox # Use current bbox from shape
+        width = x2 - x1
+        height = y2 - y1
+
+        # Calculate new coordinates based on the converted pixel value
+        # Start with current bbox coords.
+        # This will ensure min_x, min_y, max_x, max_y order is maintained by _update_coords_if_valid.
+        new_coords = list(shape.get_bbox)
+
+
+        if coord_name == 'x':
+            new_min_x = pixel_value
+            # New bbox: [new_min_x, min_y, new_min_x + width, max_y]
+            new_coords = [new_min_x, y1, new_min_x + width, y2]
+        elif coord_name == 'y':
+            new_min_y = pixel_value
+            # New bbox: [min_x, new_min_y, max_x, new_min_y + height]
+            new_coords = [x1, new_min_y, x2, new_min_y + height]
+        else:
+             print(f"Controller._set_shape_coord: Invalid coord_name: {coord_name}")
+             return False # Indicate failure
+
+        # Call the geometry utility function to update shape coordinates with validation
+        if _update_coords_if_valid(shape, new_coords): #
+            return True # Indicate successful update
+        else:
+             print(f"Controller._set_shape_coord: Coordinates for {coord_name} did not change or were invalid for shape {shape.sid}.")
+             return False # Indicate no change or invalid update
+
+    def _set_shape_dim(self, shape: Shape, dim_name: str, value_str: str):
+        """Parses input string for Width or Height, converts to pixels, and updates shape dimensions via model."""
+        # Use the imported utility function
+        pixel_value = parse_dimension(value_str, self.model.ppi) #
+
+        # Check if parsing was successful
+        if pixel_value is None:
+            # Error message shown by messagebox in commit method
+            return False # Indicate failure
+
+        # Ensure minimum size after conversion to pixels
+        min_size_px = parse_dimension("1px", self.model.ppi) # Define a minimum size in pixels (adjust as needed)
+        if pixel_value < min_size_px:
+             print(f"Controller._set_shape_dim: Dimension {dim_name} ({pixel_value}px) is less than minimum {min_size_px}px for shape {shape.sid}.")
+             # Show a warning to the user via messagebox
+             messagebox.showwarning("Size Warning", f"{dim_name} must be at least {format_pixel_output(min_size_px, self.model.ppi, self.model.measure)}.") #
+             return False # Indicate failure
+
+
+        # Get current coordinates to calculate the new bounding box
+        x1, y1, x2, y2 = shape.get_bbox # Use current bbox from shape
+        # We need the actual top-left corner as the anchor for resizing
+        current_x1 = min(x1, x2) # Ensure we use the left edge as the fixed point
+        current_y1 = min(y1, y2) # Ensure we use the top edge as the fixed point
+
+
+        # Calculate new coordinates in pixels based on the converted pixel value
+        new_coords = list(shape.get_bbox) # Start with current bbox coords
+
+        if dim_name == 'width':
+            new_width = pixel_value # Use the converted pixel value
+            new_x2 = current_x1 + new_width
+            new_coords = [current_x1, current_y1, new_x2, max(y1, y2)]
+
+        elif dim_name == 'height':
+            new_height = pixel_value # Use the converted pixel value
+            new_y2 = current_y1 + new_height
+            new_coords = [current_x1, current_y1, max(x1, x2), new_y2]
+
+        else:
+             print(f"Controller._set_shape_dim: Invalid dim_name: {dim_name}")
+             return False # Indicate failure
+
+        # Call the geometry utility function to update shape coordinates with validation
+        if _update_coords_if_valid(shape, new_coords): #
+            return True # Indicate successful update
+        else:
+             print(f"Controller._set_shape_dim: Dimensions for {dim_name} did not change or were invalid for shape {shape.sid}.")
+             return False # Indicate no change or invalid update
+
+    def _is_valid_dimension(value_str: str, ppi: float) -> bool:
+        try:
+            parse_dimension(value_str, self.model.ppi)
+            return True
+        except (ValueError, TypeError):
+            return False
     def _create_final_shape_object(self, x, y) -> Optional[Any]:
         """Creates the shape object and adds it to the Model (Controller logic)."""
         print(f"Controller._create_final_shape_object: Called with final_x={x}, final_y={y}")
@@ -585,21 +684,21 @@ class DrawingApp:
         ordered_coords = [min(self.start_x, x), min(self.start_y, y), max(self.start_x, x), max(self.start_y, y)]
         print(f"Controller._create_final_shape_object: Ordered coordinates for new shape: {ordered_coords}. Start coords: ({self.start_x}, {self.start_y})")
 
-        new_shape = None;
+        new_shape = None
         # Create a new shape instance based on the current tool type
         # Pass the generated ID, calculated coordinates, and font_manager
         if self.current_tool == 'rectangle':
-            new_shape = Rectangle(sid=iid, coords=ordered_coords, name=f"Rectangle {iid}", font_manager=self.font_manager);
+            new_shape = Rectangle(sid=iid, coords=ordered_coords, name=f"Rectangle {iid}", font_manager=self.font_manager)
         elif self.current_tool == 'oval':
-            new_shape = Oval(sid=iid, coords=ordered_coords, name=f"Oval {iid}", font_manager=self.font_manager);
+            new_shape = Oval(sid=iid, coords=ordered_coords, name=f"Oval {iid}", font_manager=self.font_manager)
         elif self.current_tool == 'triangle':
              # Triangle needs base and apex, calculate based on bounding box
              # The Triangle class __init__ should handle converting bbox to its internal representation if needed.
              # Here we pass the bounding box coords.
-            new_shape = Triangle(sid=iid, coords=ordered_coords, name=f"Triangle {iid}", font_manager=self.font_manager);
+            new_shape = Triangle(sid=iid, coords=ordered_coords, name=f"Triangle {iid}", font_manager=self.font_manager)
         elif self.current_tool == 'hexagon':
              # Hexagon also takes a bounding box
-            new_shape = Hexagon(sid=iid, coords=ordered_coords, name=f"Hexagon {iid}", font_manager=self.font_manager);
+            new_shape = Hexagon(sid=iid, coords=ordered_coords, name=f"Hexagon {iid}", font_manager=self.font_manager)
         else:
             print(f"Controller._create_final_shape_object: Unknown tool type: {self.current_tool}. Returning None.")
             return None # If current_tool is not a valid shape type, return None
@@ -645,8 +744,29 @@ class DrawingApp:
         self.view.refresh_all(self.model)  # Force immediate refresh
         self.root.after(1, lambda: self._post_selection_ui_update(sid))
 
-    def _post_selection_ui_update(self, sid: Optional[Any]):
-        pass
+    def _post_selection_ui_update(self, sid):
+        """
+        Called via `after(…)` once a new shape is selected.
+        Ensures the layers tree, properties panel, and any other UI elements
+        are updated for the newly selected shape.
+        """
+        # 1) Update the layers/shapes tree selection (you probably have code for that)
+        #    e.g. self.view.select_tree_item_for_shape(sid)
+
+        # 2) Fetch the real Shape object
+        selected_shape = self.model.get_shape(sid)
+        if selected_shape is None:
+            # Nothing selected (or shape deleted), clear the properties panel
+            self.view._update_properties_panel(None, self.get_refocus_info())
+            return
+
+        # 3) Now update the properties panel with the actual Shape
+        self.view._update_properties_panel(
+            selected_shape,
+            self.get_refocus_info()
+        )
+
+
 
     # --- Controller - Treeviews Event Handlers ---
 
@@ -713,58 +833,77 @@ class DrawingApp:
 
         stripped_value = new_value_str.strip()
 
-        # Validation
+        # --- UNIT CONVERSION FOR DIMENSIONS ---
+        if property_name in ['X', 'Y', 'Width', 'Height']:
+            try:
+                parsed_px_value = parse_dimension(new_value_str, self.model.ppi)
+                # pass only parsed_px_value (int) to your handler:
+                raw_for_handler = str(parsed_px_value)
+            except ValueError as e:
+                # [error handling…]
+                return
+        else:
+            raw_for_handler = new_value_str.strip()
+
+
+        # --- VALIDATION ---
         if "validate" in handler:
-            if not handler["validate"](stripped_value):
-                print(f"Controller.handle_property_edit_commit: Validation failed.")
-                self.set_refocus_info(shape_id, property_name)  # Controller state
-                self.update_properties_panel()  # Refresh panel
+            if property_name in ['X', 'Y', 'Width', 'Height']:
+                # Validation is handled in the set method for dimensions
+                pass
+            elif not handler["validate"](stripped_value):
+                print(f"Controller.handle_property_edit_commit: Validation failed for non-dimension property.")
+                messagebox.showerror("Validation Error", f"Invalid input for {property_name}: '{new_value_str}'.")
+                self.set_refocus_info(shape_id, property_name)
+                self.update_properties_panel()
                 return
 
         value = stripped_value
 
-        # Type conversion
-        if "type" in handler:
+        # --- APPLY VALUE ---
+        if property_name in ['X', 'Y', 'Width', 'Height']:
+            # These handlers expect raw string (which we replaced with parsed px string)
+            if not handler["set"](shape, stripped_value):
+                print(f"Controller.handle_property_edit_commit: Failed to set dimension property {property_name}.")
+                self.set_refocus_info(shape_id, property_name)
+                self.update_properties_panel()
+                return
+        else:
             try:
-                if callable(handler["type"]):
+                if "type" in handler and callable(handler["type"]):
                     value = handler["type"](stripped_value)
                 else:
                     print(f"Controller.handle_property_edit_commit: Unsupported 'type' for property '{property_name}'")
                     return
-            except ValueError:
-                print(f"Controller.handle_property_edit_commit: Invalid type.")
-                self.set_refocus_info(shape_id, property_name)  # Controller state
-                self.update_properties_panel()  # Refresh panel
-                return
 
-        # --- SET THE PROPERTY VALUE ---
-        try:
-            if "set" in handler:
-                handler["set"](shape, value)
-            else:
-                setattr(shape, self._to_shape_attr_name(property_name), value)  # Direct set
-        except Exception as e:
-            print(f"Error setting property {property_name}: {e}")
-            return
+                if "set" in handler:
+                    handler["set"](shape, value)
+                else:
+                    setattr(shape, self._to_shape_attr_name(property_name), value)
+            except ValueError:
+                print(f"Controller.handle_property_edit_commit: Invalid type conversion for {property_name}.")
+                messagebox.showerror("Type Error", f"Invalid input type for {property_name}: '{new_value_str}'.")
+                self.set_refocus_info(shape_id, property_name)
+                self.update_properties_panel()
+                return
+            except Exception as e:
+                print(f"Error setting property {property_name}: {e}")
+                return
 
         # --- TEXT CONTENT HANDLING ---
         if shape and property_name in ["Text", "Font Name", "Font Size", "Font Weight", "Justification"]:
-            # Only update text content for "Text" property changes
             if property_name == "Text":
-                shape.text = new_value_str  # Update text content ONLY here
-            
-            # Always regenerate text image for any relevant property change
+                shape.text = new_value_str
             shape._draw_text_content()
-            self.model.notify_observers()  # Notify for redraw
+            self.model.notify_observers()
 
-        # --- HANDLE NON-TEXT PROPERTIES ---
+        # --- NON-TEXT PROPERTIES ---
         elif shape:
             self.model.notify_observers()
 
-        # Set refocus info *before* the Model notification triggers refresh_all
         self.set_refocus_info(shape_id, property_name)
-
         print(f"Controller.handle_property_edit_commit: Model updated for property '{property_name}'. Model notified. Refresh pending.")
+        self.view.refresh_all(self.model)
 
     def _to_shape_attr_name(self, property_name: str) -> str:
             """Helper to convert Property Name to Shape attribute name."""
@@ -785,11 +924,32 @@ class DrawingApp:
             "right": container_width - text_width
         }[justification]
 
+    def _get_formatted_shape_properties(self, shape: Shape) -> dict:
+        """
+        Retrieves a shape's properties and formats dimension values
+        (x, y, width, height) to strings with 'px' postfix for display.
+        """
+        properties = shape.to_dict() # Assuming to_dict gives raw numerical properties
+        if properties:
+            display_properties = properties.copy()
+            
+            # Use the getter from PROPERTY_HANDLERS to format for display
+            for prop_name in ['X', 'Y', 'Width', 'Height']:
+                handler = self.PROPERTY_HANDLERS.get(prop_name)
+                if handler and "get" in handler:
+                    # Pass the shape object to the getter lambda
+                    display_properties[prop_name] = handler["get"](shape)
+            return display_properties
+        return {}
+
+
     def update_properties_panel(self):
         """Updates the properties panel with correct refocus"""
         selected_shape_data = self.model.get_shape(self.model.selected_shape)
+        # Pass formatted properties to the view
+        formatted_properties = self._get_formatted_shape_properties(selected_shape_data) if selected_shape_data else None
         self.view._update_properties_panel(
-            selected_shape_data, 
+            formatted_properties,
             self.get_refocus_info()
         )
         self.reset_refocus_info()
@@ -918,7 +1078,7 @@ class DrawingApp:
 
         print(f"Controller.open_drawing: Selected file: {file_path}. Loading...")
         try:
-            with open(file_path, 'r') as f: data = json.load(f);
+            with open(file_path, 'r') as f: data = json.load(f)
             self.model.from_dict(data, self.font_manager) # Load data into the Model (Model updates state)
             self.current_file_path = file_path # Controller state
             self.view.master.title(f"Enhanced Vector Editor - {os.path.basename(file_path)}") # Update View title
@@ -930,30 +1090,30 @@ class DrawingApp:
             self.model.notify_observers()  
             self.view.refresh_all(self.model)  
 
-        except FileNotFoundError: messagebox.showerror("Error", f"File not found:\n{file_path}");
-        except json.JSONDecodeError: messagebox.showerror("Error", f"Invalid file format:\n{file_path}");
-        except Exception as e: messagebox.showerror("Error", f"An error occurred:\n{e}");
+        except FileNotFoundError: messagebox.showerror("Error", f"File not found:\n{file_path}")
+        except json.JSONDecodeError: messagebox.showerror("Error", f"Invalid file format:\n{file_path}")
+        except Exception as e: messagebox.showerror("Error", f"An error occurred:\n{e}")
 
     def save_drawing(self):
         """Saves the current drawing (Controller logic)."""
-        if self.current_file_path: self._save_to_file(self.current_file_path);
-        else: self.save_drawing_as();
+        if self.current_file_path: self._save_to_file(self.current_file_path)
+        else: self.save_drawing_as()
 
     def save_drawing_as(self):
         """Saves the current drawing to a new file (Controller logic)."""
-        file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json"), ("All files", "*.*")]);
-        if file_path: self._save_to_file(file_path);
+        file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json"), ("All files", "*.*")])
+        if file_path: self._save_to_file(file_path)
 
     def _save_to_file(self, file_path: str):
         """Internal save method (Controller logic)."""
         print(f"\nController._save_to_file: Saving model state to {file_path}.")
         try:
-            model_data = self.model.to_dict();
-            with open(file_path, 'w') as f: json.dump(model_data, f, indent=4);
-            self.current_file_path = file_path; # Controller state
-            self.view.master.title(f"Enhanced Vector Editor - {os.path.basename(file_path)}"); # Update View title
+            model_data = self.model.to_dict()
+            with open(file_path, 'w') as f: json.dump(model_data, f, indent=4)
+            self.current_file_path = file_path # Controller state
+            self.view.master.title(f"Enhanced Vector Editor - {os.path.basename(file_path)}") # Update View title
             print(f"Controller._save_to_file: Successfully saved drawing to {file_path}.")
-        except Exception as e: messagebox.showerror("Error", f"An error occurred while saving:\n{e}");
+        except Exception as e: messagebox.showerror("Error", f"An error occurred while saving:\n{e}")
     # --- Controller - Import as Component ---
 
     def import_component_from_file(self, filepath, max_nesting=2):
@@ -961,28 +1121,42 @@ class DrawingApp:
         component = parse_component_data(data, current_depth=0, max_depth=max_nesting)
         self.model.components.append(component)
 
-    def parse_component_data(data, current_depth, max_depth):
+    def parse_component_data(self, data, current_depth, max_depth): # Added self
         if current_depth >= max_depth:
-            return flatten_component_to_image(data)  # return a ShapeModel with the image
+            # Assuming flatten_component_to_image is a helper that returns a compatible shape data
+            # This part needs to be implemented or defined in your model/shape structure.
+            # For now, this is a placeholder.
+            print("Warning: `flatten_component_to_image` is a placeholder and not implemented.")
+            return {} # Return an empty dict or a simplified representation
 
         layers = []
         for layer_data in data["layers"]:
             if "component" in layer_data:
-                layers.append(parse_component_data(layer_data["component"], current_depth + 1, max_depth))
+                layers.append(self.parse_component_data(layer_data["component"], current_depth + 1, max_depth)) # Added self
             else:
-                layers.append(LayerModel.from_dict(layer_data))
+                # Assuming LayerModel.from_dict exists and returns a Layer object
+                layers.append(Layer.from_dict(layer_data, self.font_manager)) # Assuming Layer.from_dict for layers
 
-        return ComponentModel(layers)
+        # Assuming ComponentModel is a class that can take layers
+        # This also needs to be defined in your model if it's a specific component structure.
+        # For now, just returning a list of layers/data.
+        print("Warning: `ComponentModel` is a placeholder concept and not fully implemented.")
+        return {"component_layers": layers}
+
 
     def create_component_from_selected_layers(self):
-        selected = self.layer_panel.get_selected_layers()
+        selected = self.layer_panel.get_selected_layers() # layer_panel attribute not defined
         if not selected:
             return
-        component = ComponentModel(selected)
-        self.model.components.append(component)
-        for layer in selected:
-            self.model.layers.remove(layer)
-        self.refresh_view()
+        # This part assumes a ComponentModel and direct manipulation of model.layers
+        # This needs more context from your model/view implementation.
+        # For now, it's commented out as it relies on undefined attributes/classes.
+        # component = ComponentModel(selected)
+        # self.model.components.append(component)
+        # for layer in selected:
+        #     self.model.layers.remove(layer)
+        # self.refresh_view()
+        print("Warning: `create_component_from_selected_layers` relies on undefined attributes/classes and is not fully implemented.")
 
 
     # --- Controller - CSV Import and PDF Export ---
@@ -1047,6 +1221,7 @@ class DrawingApp:
                 try:
                     w_str, h_str = dims.split(",")
                     width, height = float(w_str), float(h_str)
+                    custom_size = (width, height) # Define custom_size here
                 except ValueError:
                     messagebox.showerror(
                         "Invalid Input",
@@ -1055,6 +1230,9 @@ class DrawingApp:
                     return
             else:
                 return  # user cancelled
+        else:
+            custom_size = None # Ensure custom_size is None if not using it
+
 
         # 3) Ask page size
         page_choice = simpledialog.askstring(
@@ -1102,7 +1280,7 @@ class DrawingApp:
                 export_path=path,
                 page=page_choice,
                 use_card=use_card,
-                #custom_size=custom_size, # Pass the custom size tuple
+                custom_size=custom_size, # Pass the custom size tuple
                 cards_per_page=cards_per_page,
                 rotate_card=rotate_flag
             )
@@ -1218,3 +1396,4 @@ def rotate_image_90_clockwise(img: Image) -> Image:
     """Returns a new image rotated 90 degrees clockwise."""
     # Use ROTATE_270 for clockwise rotation
     return img.transpose(Image.Transpose.ROTATE_270)
+
