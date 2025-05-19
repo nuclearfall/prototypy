@@ -31,6 +31,7 @@ from model import DrawingModel
 
 # --- View - Handles UI and Drawing ────────────────────────────────────────────
 
+
 class DrawingView(tk.Frame):
     def __init__(self, master, controller):
         super().__init__(master)
@@ -112,18 +113,40 @@ class DrawingView(tk.Frame):
         self.left_panel = tk.Frame(self.pane, width=PANEL_WIDTH)
         self.pane.add(self.left_panel, minsize=150)
 
-        # Shapes Listbox and Buttons
-        tk.Label(self.left_panel, text="Shapes (Current Layer)").pack(anchor='w')
-        self.shapes_lb = tk.Listbox(self.left_panel)
-        self.shapes_lb.pack(fill=tk.BOTH, expand=True)
 
+        # This will create and pack the Layers/Shapes Treeview
+        tk.Label(self.left_panel, text="Layers and Shapes").pack(anchor='w') #
+        # Buttons for adding shapes (place these directly after the Treeview)
         btn_frame = tk.Frame(self.left_panel)
         btn_frame.pack(fill=tk.X)
         for stype, icon in SHAPE_BUTTONS.items():
-            # Buttons call controller methods
             tk.Button(btn_frame, text=icon,
-                      command=lambda s=stype: self.controller.start_adding(s)).pack(side=tk.LEFT, expand=True)
+                     command=lambda s=stype: self.controller.start_adding(s)).pack(side=tk.LEFT, expand=True)
+        tk.Button(btn_frame, text='🗑️', command=self.controller.remove_selected).pack(side=tk.LEFT, padx=2)
 
+        self.layers_treeview = ttk.Treeview(
+         self.left_panel,
+         columns=("Type",),
+         show="tree headings",
+         selectmode="browse",
+         height=15
+        )
+        self.layers_treeview.heading('#0', text='Name')
+        self.layers_treeview.heading('Type', text='Type')
+        self.layers_treeview.column('#0', stretch=tk.YES)
+        self.layers_treeview.column('Type', stretch=tk.NO, width=80, anchor='center')
+        self.layers_treeview.pack(fill=tk.BOTH, expand=True, padx=2, pady=2) # Pack before props_tree
+
+
+        # Layers Buttons (place these after the Properties Treeview)
+        layer_btns = tk.Frame(self.left_panel)
+        layer_btns.pack(fill=tk.X)
+        tk.Button(layer_btns, text="+", command=self.controller.model.add_layer).pack(side=tk.LEFT)
+        tk.Button(layer_btns, text="–", command=self.controller.remove_selected_layer).pack(side=tk.LEFT)
+        tk.Button(layer_btns, text="↑", command=lambda: self.controller.move_selected_layer("up")).pack(side=tk.LEFT)
+        tk.Button(layer_btns, text="↓", command=lambda: self.controller.move_selected_layer("down")).pack(side=tk.LEFT)
+
+        self._treeview_item_map: Dict[str, Any] = {}
         # Properties Treeview
         tk.Label(self.left_panel, text="Properties").pack(anchor='w')
         self.props_tree = ttk.Treeview(
@@ -138,20 +161,6 @@ class DrawingView(tk.Frame):
         self.props_tree.heading("Value", text="Value")
         self.props_tree.column("Value", width=180, anchor="w")
         self.props_tree.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
-
-        # Layers Listbox and Buttons
-        tk.Label(self.left_panel, text="Layers").pack(anchor='w')
-        self.layers_lb = tk.Listbox(self.left_panel)
-        self.layers_lb.pack(fill=tk.BOTH, expand=True)
-
-        layer_btns = tk.Frame(self.left_panel)
-        layer_btns.pack(fill=tk.X)
-        # Buttons call controller methods
-        tk.Button(layer_btns, text="+", command=self.controller.model.add_layer).pack(side=tk.LEFT)
-        tk.Button(layer_btns, text="–", command=self.controller.remove_selected_layer).pack(side=tk.LEFT)
-        tk.Button(layer_btns, text="↑", command=self.controller.model.move_layer_up).pack(side=tk.LEFT)
-        tk.Button(layer_btns, text="↓", command=self.controller.model.move_layer_down).pack(side=tk.LEFT)
-
 
         # === Drawing container (with rulers + canvas) ===
         self.drawing_area = tk.Frame(self.pane)
@@ -251,9 +260,7 @@ class DrawingView(tk.Frame):
         self.canvas.bind("<ButtonRelease-1>", self.controller.on_canvas_release)
         self.canvas.bind("<Configure>", self.controller.on_canvas_configure)
 
-        # Bind listbox events to controller methods
-        self.shapes_lb.bind("<<ListboxSelect>>", self.controller.on_shape_select)
-        self.layers_lb.bind("<<ListboxSelect>>", self.controller.on_layer_select)
+        self.layers_treeview.bind("<<TreeviewSelect>>", self.controller.on_treeview_select)
 
         # Bind treeview double-click to controller method
         self.props_tree.bind("<Double-1>", self.controller._on_treeview_double_click)
@@ -274,15 +281,18 @@ class DrawingView(tk.Frame):
 
     # --- View - Methods to update the display (Called by Controller or Model Observer) ---
 
+# In your DrawingView class in view.py
+
     def refresh_all(self, model_state): # View update method receives model state or reads from model directly
-        """Redraws canvas, listboxes, and property/merge panels to match the model state."""
+        """Redraws canvas, treeview, property/merge panels to match the model state."""
         print("\nDrawingView.refresh_all: Starting refresh_all.")
         # Read model state (View accesses Model)
         layers = model_state.layers
         selected_layer_idx = model_state.selected_layer_idx
-        grid_visible = model_state.grid_visible
+        grid_visible = model_state.grid_visible # Keep grid_visible check for drawing grid
         selected_shape_id = model_state.selected_shape
-        grid_size = model_state.grid_size
+        grid_size = model_state.grid_size # Keep grid_size for drawing grid
+
 
         # --- 1) Canvas ---
         self.canvas.delete("all") # Clear ALL items
@@ -299,54 +309,109 @@ class DrawingView(tk.Frame):
         print("DrawingView.refresh_all: Drawing shapes layer by layer.")
         # Iterate through layers in the order they are in the model list
         for layer in model_state.layers: # Access layers from model_state
-            print(f"DrawingView.refresh_all: Drawing shapes in layer '{layer.name}'.")
             # --- Add this print statement ---
             print(f"DrawingView.refresh_all: Layer '{layer.name}' contains shapes: {list(layer.shapes.keys())} BEFORE drawing loop.")
             # -------------------------------
             # Iterate through shapes in a consistent order (e.g., by ID)
             for shape_id in sorted(layer.shapes.keys()):
                  shape = layer.shapes[shape_id]
-                 print(f"DrawingView.refresh_all: Drawing shape ID {shape.sid} ('{shape.name}', Type: {shape.shape_type}).")
-                 # Use View method to draw the shape
-                 self._draw_shape_on_canvas(shape, self.canvas)
-
-        self.draw_selected_shape()
-
-        # --- 2) Layers Listbox ---
-        print("DrawingView.refresh_all: Updating layers listbox.")
-        self.layers_lb.delete(0, tk.END)
-        for idx, layer in enumerate(reversed(layers)):
-            model_idx = len(layers) - 1 - idx
-            mark = "✓ " if model_idx == selected_layer_idx else "  "
-            self.layers_lb.insert(tk.END, f"{mark}{layer.name}")
-
-        selected_listbox_idx = len(layers) - 1 - selected_layer_idx
-        if 0 <= selected_listbox_idx < self.layers_lb.size():
-            self.layers_lb.selection_clear(0, tk.END)
-            self.layers_lb.selection_set(selected_listbox_idx)
-            self.layers_lb.activate(selected_listbox_idx)
-        print("DrawingView.refresh_all: Layers listbox updated.")
+                 # Ensure the shape object is valid before attempting to draw
+                 if shape:
+                    print(f"DrawingView.refresh_all: Drawing shape ID {shape.sid} ('{shape.name}', Type: {shape.shape_type}) in layer '{layer.name}'.")
+                    # Use View method to draw the shape
+                    self._draw_shape_on_canvas(shape, self.canvas)
+                 else:
+                     print(f"DrawingView.refresh_all: Skipping drawing for invalid shape ID {shape_id} in layer '{layer.name}'.")
 
 
-        # --- 3) Shapes Listbox ---
-        print("DrawingView.refresh_all: Updating shapes listbox.")
-        self.shapes_lb.delete(0, tk.END)
-        current_layer_shapes_sorted = sorted(layers[selected_layer_idx].shapes.values(), key=lambda s: s.sid)
+        self.draw_selected_shape() # Draws selection box and handle for the selected shape (if any)
 
-        for shape in current_layer_shapes_sorted:
-            self.shapes_lb.insert(tk.END, shape.name)
 
+        # --- 2) Layers and Shapes Treeview ---
+        print("DrawingView.refresh_all: Updating layers/shapes treeview.")
+        self.layers_treeview.delete(*self.layers_treeview.get_children()) # Clear existing items
+        self._treeview_item_map.clear() # Clear the item map
+
+        # Layers are typically displayed in reversed order in UI panels (top layer at the top)
+        for listbox_idx, layer in enumerate(reversed(model_state.layers)):
+            model_layer_idx = len(model_state.layers) - 1 - listbox_idx
+            # Insert layer as a top-level item
+            layer_item_id = self.layers_treeview.insert(
+                '', # Parent item (empty string for top level)
+                'end', # Index ('end' places it at the bottom of current level relative to other top-level items)
+                text=layer.name,
+                values=("Layer",), # Value for the 'Type' column (optional)
+                # Use a unique ID for the item, incorporating its type and model index
+                iid=f"layer_{model_layer_idx}"
+            )
+            # Map the Treeview item ID to the model's layer index
+            self._treeview_item_map[f"layer_{model_layer_idx}"] = model_layer_idx
+
+            # If this is the selected layer, expand it and add its shapes
+            if model_layer_idx == model_state.selected_layer_idx:
+                self.layers_treeview.item(layer_item_id, open=True) # Expand the selected layer
+
+                # Add shapes as children of the selected layer item
+                # Iterate through shapes in a consistent order (e.g., by SID)
+                shapes_in_layer_sorted = sorted(layer.shapes.values(), key=lambda s: s.sid)
+                for shape in shapes_in_layer_sorted:
+                     # Ensure the shape object is valid before adding to treeview
+                     if shape:
+                        shape_item_id = self.layers_treeview.insert(
+                            layer_item_id, # Parent item is the layer's item ID
+                            'end', # Index ('end' places it at the bottom of current level)
+                            text=shape.name,
+                            values=(shape.shape_type.capitalize(),), # Use shape type for 'Type' column
+                            # Use a unique ID for the item, incorporating its type and shape ID
+                            iid=f"shape_{shape.sid}"
+                        )
+                        # Map the Treeview item ID to the shape's SID
+                        self._treeview_item_map[f"shape_{shape.sid}"] = shape.sid
+                     else:
+                         print(f"DrawingView.refresh_all: Skipping Treeview entry for invalid shape ID {shape.sid} in layer '{layer.name}'.")
+
+
+        # --- Select and focus the appropriate item in the Treeview ---
+        # Start by trying to select the selected shape if one exists
         if selected_shape_id is not None:
-            shape_ids_in_listbox = [s.sid for s in current_layer_shapes_sorted]
-            if selected_shape_id in shape_ids_in_listbox:
-                idx = shape_ids_in_listbox.index(selected_shape_id)
-                self.shapes_lb.selection_clear(0, tk.END)
-                self.shapes_lb.selection_set(idx)
-                self.shapes_lb.activate(idx)
-        print("DrawingView.refresh_all: Shapes listbox updated.")
+            selected_shape_tv_item_id = f"shape_{selected_shape_id}"
+            if selected_shape_tv_item_id in self._treeview_item_map:
+                 print(f"DrawingView.refresh_all: Selecting shape item in treeview: {selected_shape_tv_item_id}")
+                 # Clear previous selection and set the new one
+                 self.layers_treeview.selection_remove(self.layers_treeview.selection()) # Remove existing selections
+                 self.layers_treeview.selection_add(selected_shape_tv_item_id)
+                 self.layers_treeview.focus(selected_shape_tv_item_id)
+                 # Ensure the parent layer is open and the item is visible
+                 parent_layer_item_id = self.layers_treeview.parent(selected_shape_tv_item_id)
+                 if parent_layer_item_id:
+                      self.layers_treeview.item(parent_layer_item_id, open=True)
+                 self.layers_treeview.see(selected_shape_tv_item_id) # Scroll to see the item
+            else:
+                # Selected shape is not in the treeview (e.g., was deleted or in an unselected layer)
+                # Fallback: select the current layer
+                selected_layer_tv_item_id = f"layer_{model_state.selected_layer_idx}"
+                if selected_layer_tv_item_id in self._treeview_item_map:
+                    print(f"DrawingView.refresh_all: Selected shape item not found, selecting layer item: {selected_layer_tv_item_id}")
+                    self.layers_treeview.selection_remove(self.layers_treeview.selection())
+                    self.layers_treeview.selection_add(selected_layer_tv_item_id)
+                    self.layers_treeview.focus(selected_layer_tv_item_id)
+                    self.layers_treeview.see(selected_layer_tv_item_id)
+        else:
+             # No shape selected, select the current layer
+             selected_layer_tv_item_id = f"layer_{model_state.selected_layer_idx}"
+             if selected_layer_tv_item_id in self._treeview_item_map:
+                 print(f"DrawingView.refresh_all: No shape selected, selecting layer item: {selected_layer_tv_item_id}")
+                 self.layers_treeview.selection_remove(self.layers_treeview.selection())
+                 self.layers_treeview.selection_add(selected_layer_tv_item_id)
+                 self.layers_treeview.focus(selected_layer_tv_item_id)
+                 self.layers_treeview.see(selected_layer_tv_item_id)
+             else:
+                 print("DrawingView.refresh_all: Neither shape nor layer item found for selection.")
 
 
-        # --- 4) Properties Panel ---
+        print("DrawingView.refresh_all: Layers/shapes treeview updated and selection attempted.")
+
+        # --- 3) Properties Panel ---
         print("DrawingView.refresh_all: Updating properties panel.")
         # Pass selected shape data to the View method
         selected_shape_data = model_state.get_shape(selected_shape_id)
@@ -356,7 +421,7 @@ class DrawingView(tk.Frame):
         # Controller resets refocus info after view update
 
 
-        # --- 5) Merge Status Panel ---
+        # --- 4) Merge Status Panel ---
         print("DrawingView.refresh_all: Updating merge status panel.")
         # Pass necessary data from Controller (CSV data) and Model (shapes)
         self._populate_merge_status(self.controller.get_csv_data(), model_state.layers)
@@ -855,15 +920,29 @@ class DrawingView(tk.Frame):
         """Returns raw canvas coordinates from an event."""
         return (event.x, event.y)
 
-    def get_selected_shape_listbox_index(self) -> Optional[int]:
-        """Returns the index of the selected item in the shapes listbox."""
-        sel = self.shapes_lb.curselection()
-        return sel[0] if sel else None
+    def get_selected_treeview_item_info(self) -> Optional[Tuple[str, Any]]:
+        """
+        Returns information about the selected item in the layers_treeview.
+        Returns (item_type, model_id) or None.
+        item_type is 'layer' or 'shape'.
+        model_id is the layer index (int) or shape ID (Any).
+        """
+        selected_item_id = self.layers_treeview.focus() # Get the focused/selected item ID
+        if not selected_item_id:
+            return None # Nothing selected
 
-    def get_selected_layer_listbox_index(self) -> Optional[int]:
-         """Returns the index of the selected item in the layers listbox."""
-         sel = self.layers_lb.curselection()
-         return sel[0] if sel else None
+        # Use the internal map to get the corresponding model object/ID
+        model_id = self._treeview_item_map.get(selected_item_id)
+
+        if model_id is not None:
+            # Determine if it's a layer or a shape based on the item_id prefix
+            if selected_item_id.startswith("layer_"):
+                 return ("layer", model_id) # model_id is the layer index
+            elif selected_item_id.startswith("shape_"):
+                 return ("shape", model_id) # model_id is the shape ID
+
+        return None # Should not happen if item_id is in map, but defensive
+
 
     def get_property_treeview_item_shape_id(self, item_id: str) -> Optional[Any]:
          """Gets the shape ID associated with a property treeview item ID."""

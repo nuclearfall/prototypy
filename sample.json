@@ -7,77 +7,12 @@
                     "sid": 0,
                     "shape_type": "rectangle",
                     "coords": [
-                        0.5,
-                        0.5,
-                        362.5,
-                        506.5
+                        0,
+                        0,
+                        360,
+                        504
                     ],
-                    "name": "yo",
-                    "container_type": "Image",
-                    "color": "red",
-                    "line_width": 1,
-                    "path": "./bg.jpg",
-                    "text": "Hey",
-                    "font_name": "Bodoni 72 Smallcaps Book",
-                    "font_size": 18,
-                    "font_weight": "Regular",
-                    "justification": "center"
-                }
-            }
-        },
-        {
-            "name": "Layer 1",
-            "shapes": {
-                "1": {
-                    "sid": 1,
-                    "shape_type": "rectangle",
-                    "coords": [
-                        36.5,
-                        33.5,
-                        233.5,
-                        68.5
-                    ],
-                    "name": "@name",
-                    "container_type": "Text",
-                    "color": "black",
-                    "line_width": 1,
-                    "path": "",
-                    "text": "",
-                    "font_name": "Arial Unicode",
-                    "font_size": 12,
-                    "font_weight": "regular",
-                    "justification": "left"
-                },
-                "2": {
-                    "sid": 2,
-                    "shape_type": "rectangle",
-                    "coords": [
-                        270.5,
-                        36.5,
-                        341.5,
-                        71.5
-                    ],
-                    "name": "@power",
-                    "container_type": "Text",
-                    "color": "black",
-                    "line_width": 1,
-                    "path": "",
-                    "text": "",
-                    "font_name": "Arial Unicode",
-                    "font_size": 12,
-                    "font_weight": "regular",
-                    "justification": "left"
-                },
-                "3": {
-                    "sid": 3,
-                    "shape_type": "rectangle",
-                    "coords": [
-                        270.5,
-                        72.5,
-                        341.5,
-                        107.5
-                    ],
-                    "name": "@fury",
+                    "name": "Rectangle 0",
                     "container_type": "Text",
                     "color": "black",
                     "line_width": 1,
@@ -91,7 +26,7 @@
             }
         }
     ],
-    "selected_layer_idx": 1,
+    "selected_layer_idx": 0,
     "grid_size": 18,
     "grid_visible": true,
     "snap_to_grid": true

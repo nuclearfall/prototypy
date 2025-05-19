@@ -648,75 +648,42 @@ class DrawingApp:
     def _post_selection_ui_update(self, sid: Optional[Any]):
         pass
 
-    # --- Controller - Listbox and Treeview Event Handlers ---
+    # --- Controller - Treeviews Event Handlers ---
 
-    def on_shape_select(self, e):
-        """Handles selection changes in the Shapes listbox (Controller logic)."""
-        # Ignore during property edit
-        if self.view._is_editing_property: 
-            return 
+    def on_treeview_select(self, e):
+        """Handles selection changes in the Layers/Shapes treeview."""
+        # Ignore during property edit (using the view's state)
+        if self.view._is_editing_property:
+            return
 
-        # Get the selected index from the listbox
-        listbox_idx = self.view.get_selected_shape_listbox_index()
-        
-        if listbox_idx is not None:
-            # Get the sorted list of shapes in the current layer
-            current_layer_shapes_sorted = sorted(self.model.current_layer.shapes.values(), key=lambda shape: shape.sid)
-            
-            # Check if the index is valid
-            if 0 <= listbox_idx < len(current_layer_shapes_sorted):
-                shape_id_to_select = current_layer_shapes_sorted[listbox_idx].sid
-                
-                # Check if the selected shape is different from the current one
-                if self.model.selected_shape != shape_id_to_select:
-                    print(f"\nController.on_shape_select: Listbox selection changed to index {listbox_idx}, shape ID {shape_id_to_select}. Calling select_shape.")
-                    self.select_shape(shape_id_to_select)  # Call the method to select the shape
-                else:
-                    print(f"\nController.on_shape_select: Listbox selection is already selected shape ID {shape_id_to_select}.")
-                    # If already selected, ensure properties panel is updated/refocused (optional)
-                    # self.set_refocus_info(shape_id_to_select, None)  # Controller state
-                    # self.update_properties_panel()  # Controller updates View panel
+        selected_info = self.view.get_selected_treeview_item_info()
 
-            else:  # Invalid index, reset selection
-                self.select_shape(None)
-                print(f"\nController.on_shape_select: Invalid listbox index {listbox_idx}. Deselecting shape.")
-        else:  # If listbox selection is cleared
+        # Deselect everything if nothing is selected in the treeview
+        if selected_info is None:
+            print("\nController.on_treeview_select: Nothing selected in treeview. Deselecting shape.")
+            self.select_shape(None) # Deselect shape
+            # Do not deselect layer automatically, keep the last selected layer active
+            return
+
+        item_type, model_id = selected_info
+
+        if item_type == "layer":
+            model_layer_idx = model_id
+            print(f"\nController.on_treeview_select: Layer selected (model index {model_layer_idx}).")
+            # Select the layer in the model
+            if self.model.selected_layer_idx != model_layer_idx:
+                 self.model.select_layer(model_layer_idx) # Model update + notify
+
+            # When a layer is selected, deselect any shape
             self.select_shape(None)
-            print("\nController.on_shape_select: Listbox selection cleared. Deselecting shape.")
 
 
-
-    def on_layer_select(self, e):
-        """Handles selection changes in the Layers listbox (Controller logic)."""
-        if self.view._is_editing_property: return
-
-        listbox_idx = self.view.get_selected_layer_listbox_index()
-        if listbox_idx is not None:
-            model_layer_idx = len(self.model.layers) - 1 - listbox_idx
-            if 0 <= model_layer_idx < len(self.model.layers):
-                 if self.model.selected_layer_idx != model_layer_idx:
-                     print(f"\nController.on_layer_select: Layer listbox selection changed to listbox index {listbox_idx}, model layer index {model_layer_idx}. Calling model.select_layer.")
-                     self.model.select_layer(model_layer_idx) # Model update + notify
-
-                     # Optional: Select the last shape (highest ID) in the newly selected layer
-                     shapes_in_layer = self.model.layers[model_layer_idx].shapes
-                     if shapes_in_layer:
-                         last_shape_id = max(shapes_in_layer.keys())
-                         print(f"Controller.on_layer_select: New layer has shapes, attempting to select last shape ID: {last_shape_id}")
-                         # Use after(0, ...) to allow the current event handler to finish
-                         # and the refresh_all triggered by model.select_layer to start,
-                         # before initiating a new selection.
-                         self.root.after(1, lambda: self.select_shape(last_shape_id)) # Controller method
-                     else:
-                         print("Controller.on_layer_select: New layer has no shapes, deselecting shape.")
-                         self.root.after(1, lambda: self.select_shape(None)) # Controller method
-
-                 else:
-                     print(f"\nController.on_layer_select: Layer listbox selection is already selected model layer index {model_layer_idx}.")
-                     # If same layer, just ensure properties panel is updated
-                     self.update_properties_panel() # Controller updates View panel
-
-
+        elif item_type == "shape":
+            shape_id_to_select = model_id
+            print(f"\nController.on_treeview_select: Shape selected (ID {shape_id_to_select}).")
+            # Select the shape in the model
+            if self.model.selected_shape != shape_id_to_select:
+                 self.select_shape(shape_id_to_select) # Controller method selects shape and notifies
 
     # --- Controller - Property Editing ---
 
@@ -864,26 +831,54 @@ class DrawingApp:
         print(f"remove_selected: Removing shape {sid}")
         self.model.remove_shape(sid) # Model update + notify
 
-    def remove_selected_layer(self): # This method is called by the button command in the View
-        """Handles removing the currently selected layer (Controller logic)."""
+    def remove_selected_layer(self):
+        """Handles removing the currently selected layer based on Treeview selection."""
         # Check if the View is currently editing a property
-        if self.view._is_editing_property:
+        if self.view._is_editing_property: #
              print("remove_selected_layer: Ignored during editing.")
              return
 
-        # Get the selected layer index from the View's listbox
-        listbox_idx = self.view.get_selected_layer_listbox_index()
-        if listbox_idx is None:
-            print("remove_selected_layer: No layer selected in the listbox.")
+        # Get selected item info from the treeview
+        selected_info = self.view.get_selected_treeview_item_info()
+
+        # Ensure a layer is selected
+        if selected_info is None or selected_info[0] != "layer":
+            print("remove_selected_layer: No layer selected in the treeview.")
             return
 
-        # Convert the listbox index (reversed order) to the model index
-        model_layer_idx = len(self.model.layers) - 1 - listbox_idx
+        # Get the model layer index from the selected info
+        model_layer_idx = selected_info[1] # model_id is the layer index
+
         print(f"remove_selected_layer: Removing layer at model index {model_layer_idx}.")
 
         # Call the Model method to perform the data removal
         self.model.remove_layer(model_layer_idx) # Model update + notify
 
+    def move_selected_layer(self, direction: str):
+        """Moves the currently selected layer up or down based on Treeview selection."""
+        if self.view._is_editing_property:
+             print("move_selected_layer: Ignored during editing.")
+             return
+
+        selected_info = self.view.get_selected_treeview_item_info()
+
+        # Ensure a layer is selected
+        if selected_info is None or selected_info[0] != "layer":
+            print(f"move_selected_layer: No layer selected or selected item is not a layer in the treeview. Cannot move {direction}.")
+            return
+
+        # Get the model layer index from the selected info
+        model_layer_idx = selected_info[1] # model_id is the layer index
+
+        if direction == "up":
+            print(f"move_selected_layer: Moving layer at model index {model_layer_idx} up.")
+            self.model.move_layer_up(model_layer_idx) # Model update + notify
+        elif direction == "down":
+            print(f"move_selected_layer: Moving layer at model index {model_layer_idx} down.")
+            self.model.move_layer_down(model_layer_idx) # Model update + notify
+        else:
+            print(f"move_selected_layer: Invalid direction '{direction}'.")
+     
     def on_delete_key(self, event):
         """Handles the Delete key press (Controller logic)."""
         self.remove_selected() # Call Controller method
