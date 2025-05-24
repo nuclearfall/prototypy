@@ -4,8 +4,8 @@ from PIL import Image, ImageDraw, ImageFont
 from shapes.base_shape import Shape
 
 class Triangle(Shape):
-    def __init__(self, sid: Any, coords: List[int], name: str, **kwargs):
-        super().__init__(sid=sid, shape_type='triangle', coords=coords, name=name, **kwargs)
+    def __init__(self, sid, shape_type, coords, name, **kwargs): # shape_type is now passed from from_dict
+        super().__init__(sid=sid, shape_type=shape_type, coords=coords, name=name, **kwargs)
 
     def draw_shape(self, canvas=None, draw: Optional[ImageDraw.ImageDraw]=None):
             if not self.coords or len(self.coords) < 4: return

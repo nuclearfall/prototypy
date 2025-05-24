@@ -3,7 +3,9 @@
 import math
 import textwrap
 from typing import List, Dict, Optional, Any, Tuple
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont # Ensure ImageFont is here
+import tkinter as tk # Needed for tk.Canvas type hint
+import tkinter.font as tkFont # Needed for tkFont.Font type hint
 
 from utils.font_manager import FontManager # Still need FontManager type hint and class access
 from utils.geometry import _update_coords_if_valid # If used directly in Shape
@@ -82,13 +84,16 @@ class Shape:
         # Font properties
         self.font_name = kwargs.get("font_name", "Arial Unicode")
         self.font_size = kwargs.get("font_size", 12)
-        self.font_weight = kwargs.get("font_weight", "regular")
+        self.font_weight = kwargs.get("font_weight", "normal")
+        self.font_slant = kwargs.get("font_slant", "roman") # Ensure font_slant is initialized
         self.justification = kwargs.get("justification", "left")
         self.vertical_justification = kwargs.get("vertical_justification", "top") # Add vertical justification
 
         # Load content if it's an image or text container and data is present
         if self.container_type == 'Text' and self.text:
-            self._draw_text_content()
+            # When initializing, we want to create the PIL content first for later use (e.g., clipping)
+            # Use a default DPI (e.g., 300) for initial PIL text rendering
+            self._draw_text_content(draw_pil=True, render_dpi=300) 
         elif self.container_type == 'Image' and self.path:
             self._load_image_content()
 
@@ -155,7 +160,7 @@ class Shape:
             self.container_type = container_type
             if container_type == "Text":
                 self.path = "" # Clear path if changing to text
-                self._draw_text_content() # Re-render text content
+                self._draw_text_content(draw_pil=True, render_dpi=300) # Re-render text content as PIL
             elif container_type == "Image":
                 self.text = "" # Clear text if changing to image
                 self._load_image_content() # Attempt to load image content
@@ -168,7 +173,7 @@ class Shape:
     def set_text(self, new_text: str):
         self.text = new_text
         if self.container_type == 'Text':
-            self._draw_text_content() # Regenerate content
+            self._draw_text_content(draw_pil=True, render_dpi=300) # Regenerate content as PIL
         # self.model.notify_observers() # Model should notify
 
     def set_path(self, new_path: str):
@@ -181,35 +186,36 @@ class Shape:
         if self.font_manager and new_font_name in self.font_manager.get_families():
             self.font_name = new_font_name
             if self.container_type == 'Text':
-                self._draw_text_content() # Regenerate text content
+                self._draw_text_content(draw_pil=True, render_dpi=300) # Regenerate text content
         # self.model.notify_observers() # Model should notify
 
     def set_font_size(self, new_font_size: int):
         new_font_size = max(1, new_font_size) # Ensure font size is at least 1
         self.font_size = new_font_size
         if self.container_type == 'Text':
-            self._draw_text_content() # Regenerate text content
+            self._draw_text_content(draw_pil=True, render_dpi=300) # Regenerate text content
         # self.model.notify_observers() # Model should notify
 
     def set_font_weight(self, new_font_weight: str):
         if self.font_manager and new_font_weight in self.font_manager.get_weights_for_family(self.font_name):
             self.font_weight = new_font_weight
             if self.container_type == 'Text':
-                self._draw_text_content() # Regenerate text content
+                self._draw_text_content(draw_pil=True, render_dpi=300) # Regenerate text content
         # self.model.notify_observers() # Model should notify
+
 
     def set_justification(self, new_justification: str):
         if new_justification in ["left", "right", "center"]:
             self.justification = new_justification
             if self.container_type == 'Text':
-                self._draw_text_content() # Regenerate text content
+                self._draw_text_content(draw_pil=True, render_dpi=300) # Regenerate text content
         # self.model.notify_observers() # Model should notify
 
     def set_vertical_justification(self, new_vertical_justification: str):
         if new_vertical_justification in ["top", "center", "bottom"]:
             self.vertical_justification = new_vertical_justification
             if self.container_type == 'Text':
-                self._draw_text_content()
+                self._draw_text_content(draw_pil=True, render_dpi=300) # Regenerate text content
         # self.model.notify_observers() # Model should notify
 
     def init_coords(self, x0, y0, x1, y1):
@@ -262,7 +268,7 @@ class Shape:
     def to_dict(self) -> Dict[str, Any]:
         """Serializes the Shape instance to a dictionary."""
         return {
-            'id': self.sid,
+            'sid': self.sid,
             'shape_type': self.shape_type,
             'coords': self.coords,
             'name': self.name,
@@ -283,12 +289,12 @@ class Shape:
     @staticmethod
     def from_dict(data: Dict[str, Any], font_manager: FontManager):
         """Factory method to create a Shape instance from a dictionary."""
-        sid = data.get('id')
+        sid = data.get('sid')
         shape_type = data.get('shape_type')
         coords = data.get('coords')
         name = data.get('name')
 
-        if not all([sid, shape_type, coords, name is not None]):
+        if sid is None or shape_type is None or coords is None or name is None:
             print(f"Shape.from_dict: Missing essential data for shape creation: {data}")
             return None
 
@@ -328,8 +334,10 @@ class Shape:
             )
 
             # After creation, regenerate content using the loaded properties and the font_manager
+            # Always generate PIL content when loading from dict for consistency with clipping
             if shape_instance.container_type == 'Text' and shape_instance.text:
-                 shape_instance._draw_text_content()
+                 # Use a default DPI (e.g., 300) for initial PIL text rendering
+                 shape_instance._draw_text_content(draw_pil=True, render_dpi=300)
             elif shape_instance.container_type == 'Image' and shape_instance.path:
                  shape_instance._load_image_content()
 
@@ -342,94 +350,211 @@ class Shape:
             traceback.print_exc()
             return None # Handle errors during instance creation
 
-    def _draw_text_content(self):
-        """Renders the text content into a PIL Image."""
+
+    def _draw_text_content(self, canvas: Optional[tk.Canvas] = None, draw_pil: bool = False, render_dpi: int = 72):
+        """
+        Renders the text content either directly to a Tkinter Canvas (if `canvas` is provided
+        and `draw_pil` is False) or into a PIL Image (otherwise).
+        The text is word-wrapped and justified within the shape's bounding box.
+
+        Args:
+            canvas (tkinter.Canvas, optional): If provided and `draw_pil` is False,
+                                              text will be drawn directly onto this Tkinter Canvas.
+            draw_pil (bool): If True, forces PIL rendering to `self.content`.
+                             If False and `canvas` is a Tkinter.Canvas, draws to the Tkinter canvas.
+            render_dpi (int): The DPI to use when rendering text to a PIL image. Higher values
+                              result in sharper text, especially for PDF export.
+        """
         if not self.font_manager or not self.text:
-            self.content = None
+            self.content = None # Clear PIL content
+            if isinstance(canvas, tk.Canvas):
+                # Clear any text items previously drawn by this shape instance on the canvas
+                canvas.delete(f"text_shape_{self.sid}")
             return
 
-        try:
-            font = self.font_manager.get_font(self.font_name, self.font_size, self.font_weight)
-            if not font:
-                print(f"Shape {self.sid}: Could not load font {self.font_name} {self.font_weight} {self.font_size}")
-                self.content = None
-                return
+        x0, y0, x1, y1 = self.get_bbox
+        # Calculate container width and height in pixels based on the shape's bounding box.
+        # These are the dimensions of the area the text should occupy *on the final output*.
+        container_width_pixels = max(1, x1 - x0)
+        container_height_pixels = max(1, y1 - y0)
 
-            # Get bounding box of the shape for text rendering
-            x0, y0, x1, y1 = self.get_bbox
-            container_width = max(1, x1 - x0)
-            container_height = max(1, y1 - y0)
+        # Determine if we are drawing to a Tkinter Canvas directly
+        is_tk_canvas_draw = isinstance(canvas, tk.Canvas) and not draw_pil
 
-            # Create a dummy image and draw context to measure text
-            dummy_img = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
-            dummy_draw = ImageDraw.Draw(dummy_img)
+        if is_tk_canvas_draw:
+            # --- Tkinter Drawing Path ---
+            try:
+                # Use get_tk_font for Tkinter canvas drawing
+                tk_font = self.font_manager.get_tk_font(
+                    self.font_name, self.font_size, self.font_weight, self.font_slant
+                )
+                if not tk_font:
+                    print(f"Shape {self.sid}: Could not load Tkinter font {self.font_name} {self.font_weight} {self.font_size}")
+                    canvas.delete(f"text_shape_{self.sid}")
+                    return
 
-            # Estimate average character width for initial wrapping
-            # A more robust solution might involve a fixed-width font or iterating character by character
-            avg_char_width = font.getbbox("A")[2] - font.getbbox("A")[0] # Get width of 'A'
+                # Remove previous text drawn by this shape instance
+                canvas.delete(f"text_shape_{self.sid}")
 
-            # Calculate max characters per line that fit within the container width
-            max_chars_per_line = max(1, int(container_width // avg_char_width))
-            if max_chars_per_line == 0: # Avoid division by zero if container_width is very small
-                 max_chars_per_line = 1
+                # Tkinter's create_text with 'width' handles word wrapping automatically.
+                # We need to estimate the total height for vertical justification.
+                # A simple approximation for height calculation:
+                # Get the approximate max chars per line that Tkinter's width would cause
+                # Based on average char width
+                approx_char_width_tk = tk_font.measure("M")
+                max_chars_per_line_approx = max(1, int(container_width_pixels / approx_char_width_tk))
+                
+                wrapped_lines_for_height_calc = textwrap.fill(self.text, width=max_chars_per_line_approx).split('\n')
+                total_text_height_tk = len(wrapped_lines_for_height_calc) * tk_font.metrics("linespace")
 
-            # Wrap the text
-            wrapped_text = textwrap.fill(self.text, width=max_chars_per_line)
-            lines = wrapped_text.split('\n')
+                # Determine starting Y for vertical justification
+                start_y_text_tk = y0 # Default to top of the shape's bbox
+                if self.vertical_justification == "center":
+                    start_y_text_tk = y0 + (container_height_pixels - total_text_height_tk) / 2
+                elif self.vertical_justification == "bottom":
+                    start_y_text_tk = y0 + container_height_pixels - total_text_height_tk
+                
+                # Ensure the starting Y is not above the shape's top boundary and within bounds
+                start_y_text_tk = max(y0, start_y_text_tk)
+                # Cap the start_y_text_tk so text doesn't flow past bottom if it's too tall
+                start_y_text_tk = min(y1, start_y_text_tk)
 
-            # Calculate total text height
-            total_text_height = 0
-            line_heights = []
-            for line in lines:
-                # Use gettextbbox for accurate measurement
-                bbox = dummy_draw.textbbox((0, 0), line, font=font)
-                line_height = bbox[3] - bbox[1] # height is ymax - ymin
-                line_heights.append(line_height)
-                total_text_height += line_height
 
-            # Determine starting y for vertical justification
-            start_y_text = 0
-            if self.vertical_justification == "center":
-                start_y_text = (container_height - total_text_height) / 2
-            elif self.vertical_justification == "bottom":
-                start_y_text = container_height - total_text_height
-            start_y_text = max(0, start_y_text) # Ensure not negative
+                # Determine Tkinter anchor and justify for create_text
+                tk_anchor = "nw" # Default: top-left of text block at (x, y)
+                tk_justify = self.justification # 'left', 'center', 'right'
 
-            # Create the final image for the text content
-            text_img = Image.new('RGBA', (int(container_width), int(container_height)), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(text_img)
-
-            y_offset = start_y_text
-            for i, line in enumerate(lines):
-                # Calculate line width for justification
-                line_bbox = draw.textbbox((0, 0), line, font=font)
-                line_width = line_bbox[2] - line_bbox[0]
-
-                x = 0
+                # Calculate x-coordinate based on horizontal justification
+                text_x_tk = x0 # Default for left justification (anchor 'nw')
                 if self.justification == "center":
-                    x = (container_width - line_width) / 2
+                    text_x_tk = x0 + container_width_pixels / 2 # Center of the shape's width
+                    tk_anchor = "n" # Anchor text block's top-center at (text_x_tk, start_y_text_tk)
                 elif self.justification == "right":
-                    x = container_width - line_width
-                x = max(0, x) # Ensure not negative
+                    text_x_tk = x0 + container_width_pixels # Right edge of the shape's width
+                    tk_anchor = "ne" # Anchor text block's top-right at (text_x_tk, start_y_text_tk)
 
-                draw.text((x, y_offset), line, font=font, fill=self.color)
-                y_offset += line_heights[i] # Move to the next line
+                canvas.create_text(
+                    text_x_tk,
+                    start_y_text_tk,
+                    text=self.text,
+                    font=tk_font,
+                    fill=self.color,
+                    width=container_width_pixels, # This is crucial for Tkinter's internal word wrapping
+                    anchor=tk_anchor,      # Anchor point for the overall text block
+                    justify=tk_justify,    # Justification *within* the wrapped text block
+                    tags=f"text_shape_{self.sid}" # Unique tag for this shape's text
+                )
+                self.content = None # No PIL content needed when drawing directly to Tkinter
 
-            self.content = text_img
+            except Exception as e:
+                print(f"Shape {self.sid}: Error drawing text to Tkinter canvas: {e}")
+                self.content = None # Clear PIL content on error
+                canvas.delete(f"text_shape_{self.sid}") # Clear any partial text
 
-        except Exception as e:
-            print(f"Shape {self.sid}: Error drawing text content: {e}")
-            self.content = None
+        else:
+            # --- PIL Drawing Path ---
+            # This path is used if `canvas` is not a Tkinter.Canvas or `draw_pil` is True.
+            # This is also the path that will generate the PIL Image for clipping.
+            try:
+                # Calculate PIL font size in pixels based on desired point size and render_dpi
+                # 1 point = 1/72 inch. So, size_in_pixels = (size_in_points / 72) * render_dpi
+                pil_font_size_pixels = int(round((self.font_size / 72.0) * render_dpi))
+                pil_font_size_pixels = max(1, pil_font_size_pixels) # Ensure minimum font size
 
-    def _load_image_content(self):
-        """Loads an image from self.path into self.content."""
-        if not self.path:
-            self.content = None
-            return
+                # Use get_pil_font for PIL rendering with the calculated pixel size
+                font = self.font_manager.get_pil_font(
+                    self.font_name, pil_font_size_pixels, self.font_weight, self.font_slant
+                )
+                if not font:
+                    print(f"Shape {self.sid}: Could not load PIL font {self.font_name} {self.font_weight} {pil_font_size_pixels}px.")
+                    self.content = None
+                    return
 
-        try:
-            full_path = self.path # Assume path is relative or absolute
-            
+                # Calculate container dimensions in high-resolution pixels
+                # This is the target size for the text image *before* final scaling to the PDF.
+                # It's based on the shape's actual dimensions, scaled up by the render_dpi.
+                high_res_container_width = max(1, int(round((container_width_pixels / 72.0) * render_dpi)))
+                high_res_container_height = max(1, int(round((container_height_pixels / 72.0) * render_dpi)))
+                
+                # Create a dummy image and draw context to measure text at high resolution
+                # Use a larger dummy image to avoid issues with textbbox for large fonts
+                dummy_img = Image.new('RGBA', (high_res_container_width + 100, high_res_container_height + 100), (0, 0, 0, 0))
+                dummy_draw = ImageDraw.Draw(dummy_img)
+
+                # Estimate average character width for initial wrapping based on high-res font
+                # Use textbbox to get more accurate character width
+                try:
+                    avg_char_width_bbox = dummy_draw.textbbox((0, 0), "M", font=font)
+                    avg_char_width = avg_char_width_bbox[2] - avg_char_width_bbox[0]
+                except Exception:
+                    # Fallback if textbbox fails for some reason
+                    avg_char_width = pil_font_size_pixels * 0.6 # A rough estimate
+
+                max_chars_per_line = max(1, int(high_res_container_width // avg_char_width))
+                if max_chars_per_line == 0: 
+                     max_chars_per_line = 1
+
+                wrapped_text = textwrap.fill(self.text, width=max_chars_per_line)
+                lines = wrapped_text.split('\n')
+
+                total_text_height = 0
+                line_heights = []
+                max_line_width = 0
+                for line in lines:
+                    bbox = dummy_draw.textbbox((0, 0), line, font=font)
+                    line_height = bbox[3] - bbox[1] 
+                    line_width = bbox[2] - bbox[0]
+                    line_heights.append(line_height)
+                    total_text_height += line_height
+                    max_line_width = max(max_line_width, line_width)
+
+                # Determine starting y for vertical justification within the PIL image
+                start_y_text_pil = 0
+                if self.vertical_justification == "center":
+                    start_y_text_pil = (high_res_container_height - total_text_height) / 2
+                elif self.vertical_justification == "bottom":
+                    start_y_text_pil = high_res_container_height - total_text_height
+                start_y_text_pil = max(0, start_y_text_pil) 
+
+                # Create the final PIL image for the text content
+                # The image needs to be large enough to contain the wrapped text and justification padding.
+                # It should be at least the high-res container dimensions.
+                final_img_width = max(high_res_container_width, int(max_line_width) + 2) # Add a small buffer
+                final_img_height = max(high_res_container_height, int(total_text_height) + 2) # Add a small buffer
+                
+                text_img = Image.new('RGBA', (final_img_width, final_img_height), (0, 0, 0, 0)) # Fully transparent background
+                pil_draw_context = ImageDraw.Draw(text_img)
+
+                y_offset = start_y_text_pil
+                for i, line in enumerate(lines):
+                    line_bbox = pil_draw_context.textbbox((0, 0), line, font=font)
+                    line_width = line_bbox[2] - line_bbox[0]
+
+                    x_pil = 0
+                    if self.justification == "center":
+                        x_pil = (final_img_width - line_width) / 2
+                    elif self.justification == "right":
+                        x_pil = final_img_width - line_width
+                    x_pil = max(0, x_pil) 
+
+                    # PIL's text method draws from the top-left of the text's bounding box relative to the text_img origin.
+                    # Adjust 'x_pil' and 'y_offset' by the line_bbox[0] and line_bbox[1] to get the correct draw position.
+                    pil_draw_context.text((x_pil - line_bbox[0], y_offset - line_bbox[1]), line, font=font, fill=self.color)
+                    y_offset += line_heights[i] 
+
+                self.content = self.clip_image_to_geometry(text_img) # Store the PIL image
+
+            except Exception as e:
+                print(f"Shape {self.sid}: Error drawing text content (PIL): {e}")
+                import traceback
+                traceback.print_exc() # Print full traceback for debugging
+                self.content = None
+
+
+    def _load_image_content(self, path=None):
+        """Loads an image from self.path or path into self.content."""
+        full_path = path or self.path # Assume path is relative or absolute
+        if full_path:
             # Check if it's a relative path to the current working directory
             if not os.path.isabs(full_path) and not full_path.startswith('./') and not full_path.startswith('.\\'):
                 # Prepend './' for paths that are just filenames or relative without explicit dot
@@ -440,56 +565,44 @@ class Shape:
                 self.content = None
                 return
 
-            img = Image.open(full_path)
-            img = img.convert("RGBA") # Ensure RGBA for transparency
-            
-            # Resize image to fit bounding box while maintaining aspect ratio, then crop if clip_image is True
-            x0, y0, x1, y1 = self.get_bbox
-            container_width = max(1, x1 - x0)
-            container_height = max(1, y1 - y0)
+            try:
+                img = Image.open(full_path)
+                img = img.convert("RGBA") # Ensure RGBA for transparency
+            except Exception as e:
+                print(f"Shape {self.sid}: Error opening image {full_path}: {e}")
+                self.content = None
+                return
+        elif self.content:
+            img = self.content.convert("RGBA")
+        else:
+            return
 
-            if self.clip_image:
-                # Fill the container, cropping excess
-                img_aspect = img.width / img.height
-                container_aspect = container_width / container_height
+        self.content = self.clip_image_to_geometry(img)
 
-                if img_aspect > container_aspect:
-                    # Image is wider than container, scale to height and crop width
-                    new_height = container_height
-                    new_width = int(new_height * img_aspect)
-                else:
-                    # Image is taller or same aspect as container, scale to width and crop height
-                    new_width = container_width
-                    new_height = int(new_width / img_aspect)
-
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-                # Calculate crop box
-                left = (new_width - container_width) / 2
-                top = (new_height - container_height) / 2
-                right = (new_width + container_width) / 2
-                bottom = (new_height + container_height) / 2
-                img = img.crop((int(left), int(top), int(right), int(bottom)))
-            else:
-                # Fit within container, maintaining aspect ratio, without cropping
-                img.thumbnail((container_width, container_height), Image.Resampling.LANCZOS)
-                # Create a new blank image of the container size and paste the scaled image
-                # This centers the image if it's smaller than the container after thumbnailing
-                final_img = Image.new('RGBA', (int(container_width), int(container_height)), (0, 0, 0, 0))
-                paste_x = (container_width - img.width) // 2
-                paste_y = (container_height - img.height) // 2
-                final_img.paste(img, (int(paste_x), int(paste_y)))
-                img = final_img # Use the new image with padding
-
-            self.content = img
-
-        except FileNotFoundError:
-            print(f"Shape {self.sid}: Image file not found at {self.path}")
+    def draw_content(self, path=None, text=None, draw=True):
+        # Step 1: Use PIL to create the content image
+        # This method is now primarily for generating the PIL content
+        # Use a default DPI (e.g., 300) for PIL text rendering here
+        if self.container_type.lower() == 'text':
+            self._draw_text_content(draw_pil=True, render_dpi=300) # Always generate PIL content here
+        elif self.container_type.lower() == 'image':
+            self._load_image_content()
+        else:
             self.content = None
-        except Exception as e:
-            print(f"Shape {self.sid}: Error loading image from {self.path}: {e}")
-            self.content = None
+            return None
 
+        # Step 2: If draw=False, convert the PIL image to a Tk-compatible PhotoImage
+        # This typically means a PhotoImage is requested for display
+        if not draw:
+            from PIL import ImageTk # Import ImageTk locally for this method to avoid circular dependency
+            if ImageTk is None: # This check might be redundant if import is direct
+                raise RuntimeError("Tkinter not available")
+            if self.content:
+                self.tk_image = ImageTk.PhotoImage(self.content)
+                return self.tk_image
+            return None # Return None if no content to convert
+
+        return self.content # Return PIL Image content if draw=True (default)
     
     def handle_contains(self, x, y):
         if not self.coords or len(self.coords) < 4: return False
@@ -509,6 +622,8 @@ class Shape:
     def clip_image_to_geometry(self, pil_image: Image.Image) -> Image.Image:
         return pil_image  # Override in subclasses
 
+    def draw(self):
+        pass
 
 
 # Import specific shape subclasses for the from_dict factory method

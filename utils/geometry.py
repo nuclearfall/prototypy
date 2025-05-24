@@ -153,5 +153,5 @@ def _update_coords_if_valid(shape: "Shape", new_bbox: List[float]) -> bool:
 
 
 def calculate_snap(model, x, y):
-    inc = model.grid_major_px
+    inc = model.grid_minor_px
     return (round(x / inc) * inc, round(y / inc) * inc)

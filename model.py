@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional, Any # For type hinting
+from typing import List, Dict, OrderedDict, Optional, Any # For type hinting
 import tkinter as tk
 # Assuming FontManager is in utils/font_manager.py
 from utils.font_manager import FontManager
@@ -11,7 +11,7 @@ from shapes.base_shape import Shape # Import the base Shape class
 from utils.geometry import _update_coords_if_valid, parse_dimension # For updating shape coordinates
 
 # Assuming constants are in a central constants.py at the root level
-from constants import PPI, GRID_SIZE # Example constant
+from constants import PPI, GRID_SIZE, SHAPE_TYPES # Example constant
 
 # Note: The specific shape subclasses (Rectangle, Oval, etc.) are not directly
 # imported here because the Layer.from_dict method will use the Shape.from_dict
@@ -21,7 +21,7 @@ class Layer:
     def __init__(self, name, font_manager):
         self.name = name
         self.font_manager = font_manager
-        self.shapes: Dict[Any, Shape] = {} # Dictionary mapping shape ID to Shape object
+        self.shapes: OrderedDict[Any, Shape] = {} # Dictionary mapping shape ID to Shape object
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes the Layer instance to a dictionary using Shape.to_dict()."""
@@ -117,14 +117,14 @@ class DrawingModel:
         self.grid_division      = 1
 
         # How many *minor* ticks per full-unit? (e.g. 4 → 1/4″)
-        self.grid_subdivision   = 4
+        self.grid_subdivision   = 8
 
         # How many micro-ticks per full-unit? (used if you want 16th-inch)
         self.grid_subsubdivision = 16
 
         # How many *mid-ticks* per full-unit? (e.g. 2 → 1/2″)
         #                                                    ^–– this is your “quarter of full”
-        self.grid_mid_division  = 2
+        self.grid_mid_division  = 4
 
         # ── Compute pixel spacings ─────────────────────────────────────────
         # 1 full unit (1 in) → px
@@ -172,10 +172,10 @@ class DrawingModel:
     def to_dict(self):
         return {
             'layers': [layer.to_dict() for layer in self.layers],
-            'selected_layer_idx': self.selected_layer_idx,
-            'grid_size': self.grid_size,
-            'grid_visible': self.grid_visible,
-            'snap_to_grid': self.snap_to_grid,
+            #'selected_layer_idx': self.selected_layer_idx,
+            #'grid_size': self.grid_size,
+            #'grid_visible': self.grid_visible,
+            #'snap_to_grid': self.snap_to_grid,
         }
 
 
@@ -200,9 +200,9 @@ class DrawingModel:
 
         # Load grid settings
         # Assuming GRID_SIZE is imported from constants
-        self.grid_size = data.get('grid_size', GRID_SIZE)
-        self.grid_visible = data.get('grid_visible', True)
-        self.snap_to_grid = data.get('snap_to_grid', True)
+        # self.grid_size = data.get('grid_size', GRID_SIZE)
+        # self.grid_visible = data.get('grid_visible', True)
+        # self.snap_to_grid = data.get('snap_to_grid', True)
 
 
         self.selected_shape = None # Reset transient state
@@ -358,25 +358,23 @@ class DrawingModel:
         if not old_shape or new_shape_type not in SHAPE_TYPES: return
         if new_shape_type == old_shape.shape_type: return
 
-        new_shape = None
         coords_for_new_shape = old_shape.coords
 
-        if new_shape_type == 'rectangle': new_shape = Rectangle(id=sid, coords=coords_for_new_shape, name=old_shape.name)
-        elif new_shape_type == 'oval': new_shape = Oval(id=sid, coords=coords_for_new_shape, name=old_shape.name)
-        elif new_shape_type == 'triangle':
-            bbox = old_shape.get_bbox
-            coords_for_new_shape = [bbox[0], bbox[1], bbox[2], bbox[3]]
-            new_shape = Triangle(id=sid, coords=coords_for_new_shape, name=old_shape.name)
-        elif new_shape_type == 'hexagon':  # Add hexagon case
-            new_shape = Hexagon(id=sid, coords=coords_for_new_shape, name=old_shape.name)
-        else: return
-
-        new_shape.container_type = old_shape.container_type
-        new_shape.text = old_shape.text
-        new_shape.path = old_shape.path
-        new_shape.color = old_shape.color
-        new_shape.line_width = old_shape.line_width
-        new_shape.content = old_shape.content
+        # if new_shape_type == 'rectangle': new_shape = Rectangle(id=sid, coords=coords_for_new_shape, name=old_shape.name)
+        # elif new_shape_type == 'oval': new_shape = Oval(id=sid, coords=coords_for_new_shape, name=old_shape.name)
+        # elif new_shape_type == 'triangle':
+        #     bbox = old_shape.get_bbox
+        #     coords_for_new_shape = [bbox[0], bbox[1], bbox[2], bbox[3]]
+        #     new_shape = Triangle(id=sid, coords=coords_for_new_shape, name=old_shape.name)
+        # elif new_shape_type == 'hexagon':  # Add hexagon case
+        #     new_shape = Hexagon(id=sid, coords=coords_for_new_shape, name=old_shape.name)
+        # else: return
+        print("attempting to reclassify")
+        old_shape_data = old_shape.to_dict()
+        old_shape_data['shape_type'] = new_shape_type
+        print(old_shape_data)
+        new_shape = Shape.from_dict(old_shape_data, self.font_manager)
+        print(new_shape.sid, new_shape.shape_type)
 
         found_layer = None
         for layer in self.layers:

@@ -49,6 +49,9 @@ class DrawingView(tk.Frame):
         self.grid_var = tk.BooleanVar(value=True)
         self.snap_var = tk.BooleanVar(value=True)
 
+        # Define RENDER_DPI here for consistency in the View
+        self.RENDER_DPI = 300
+
 
         # Build UI
         self._build_ui()
@@ -80,8 +83,8 @@ class DrawingView(tk.Frame):
             model.grid_ppi = int(self.ppi * 2.54)
             model.subdivision = 10
             model.division = 1
-            model.grid_size = int(model.ppi)
-            return grid_size
+            model.grid_size = int(self.ppi)
+            return model.grid_size # Corrected return value
 
     def _build_ui(self):
         # Toolbar
@@ -578,7 +581,7 @@ class DrawingView(tk.Frame):
             self._shape_id_to_canvas_items.setdefault(shape.sid, []).append(rect_id)
 
             text_x = label_x1 + padding; text_y = label_y1 - box_height + padding
-            text_id = canvas.create_text(text_x, text_y, text=label_text, fill=label_color, font=font, anchor='nw', tags=('name_label_text', f'name_label_text_of_{shape.sid}'))
+            text_id = canvas.create_text(text_x, text=label_text, fill=label_color, font=font, anchor='nw', tags=('name_label_text', f'name_label_text_of_{shape.sid}'))
             self._shape_id_to_canvas_items.setdefault(shape.sid, []).append(text_id)
         except Exception as e: print(f"!! View: Error drawing Tkinter name label for shape {shape.sid}: {e}")
 
@@ -595,7 +598,8 @@ class DrawingView(tk.Frame):
                 # This should ideally be triggered by text/font/size/justification changes
                 # If not already generated, call it here as a fallback for drawing
                 if not isinstance(shape.content, Image.Image):
-                    shape._draw_text_content()
+                    # For on-screen Tkinter display, use a standard DPI (e.g., 72)
+                    shape._draw_text_content(canvas=canvas, render_dpi=72)
 
                 # Now, if shape.content is a PIL Image, draw it
                 if isinstance(shape.content, Image.Image):
@@ -746,7 +750,7 @@ class DrawingView(tk.Frame):
                 "Color", "Line Width", "Container Type"
             ]
             if selected_shape.container_type == "Text":
-                properties_to_display += ["Text", "Font Name", "Font Size", "Font Weight", "Justification"]
+                properties_to_display += ["Text", "Font Name", "Font Size", "Font Weight", "Justification", "Vertical Justification"]
             else:
                 properties_to_display.append("Path")
 
@@ -872,7 +876,7 @@ class DrawingView(tk.Frame):
         tv = self.props_tree; prop_name = tv.set(row_id, "Property");
         sid = self._tv_item_to_shape_id.get(row_id);
 
-        if sid is None: self.update_properties_panel(None); return # Shape gone, refresh panel
+        if sid is None: self._update_properties_panel(None); return # Shape gone, refresh panel
         # Notify controller about the committed change
         self.controller.handle_property_edit_commit(sid, prop_name, new_value_str)
 
@@ -907,7 +911,7 @@ class DrawingView(tk.Frame):
         prop_name = tv.set(row_id, "Property")
         sid = self._tv_item_to_shape_id.get(row_id)
 
-        if sid is None:
+        if sid is None: # Corrected from '===' to 'is None'
             self._update_properties_panel(None)
             return
 
@@ -1030,11 +1034,19 @@ class DrawingView(tk.Frame):
         print("\nDrawingView.flatten_card: Starting flattening process.")
         # Compute overall model bounds
         min_x, min_y, max_x, max_y = model.get_model_bounds()
-        width = max(1, int(round(max_x - min_x)))
-        height = max(1, int(round(max_y - min_y)))
-        canvas = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+        width_72dpi = max(1, int(round(max_x - min_x)))
+        height_72dpi = max(1, int(round(max_y - min_y)))
 
-        # Merge CSV data into shapes: for each key, find shape named '@key'
+        # Calculate the dimensions of the canvas at the desired RENDER_DPI
+        scale_factor = self.RENDER_DPI / 72.0
+        canvas_width_hires = max(1, int(round(width_72dpi * scale_factor)))
+        canvas_height_hires = max(1, int(round(height_72dpi * scale_factor)))
+
+        # Create the base canvas for the card at high resolution.
+        canvas = Image.new("RGBA", (canvas_width_hires, canvas_height_hires), (255, 255, 255, 255))
+        draw = ImageDraw.Draw(canvas) # Get a draw context for drawing outlines later
+
+        # Merge CSV data into shapes: for each key, find shape named '@<field>'
         for key, val in row_data.items():
             shape_name = str(key)
             for layer in model.layers:
@@ -1042,7 +1054,8 @@ class DrawingView(tk.Frame):
                     if shape.name == shape_name:
                         if shape.container_type == 'Text':
                             shape.text = str(val)
-                            shape._draw_text_content()
+                            # Pass RENDER_DPI to _draw_text_content for high-resolution PIL text rendering
+                            shape._draw_text_content(draw_pil=True, render_dpi=self.RENDER_DPI) 
                         elif shape.container_type == 'Image':
                             shape.path = str(val).strip()
                             shape._load_image_content()
@@ -1052,59 +1065,78 @@ class DrawingView(tk.Frame):
             print(f"DrawingView.flatten_card: Layer '{layer.name}'")
             for sid in sorted(layer.shapes.keys()):
                 shape = layer.shapes[sid]
-                # raw bbox
-                x0, y0, x1, y1 = shape.get_bbox
-                # compute inset half border
-                inset = (shape.line_width or 0)
-                # adjust bbox for content
-                adj_x0 = x0 + inset
-                adj_y0 = y0 + inset
-                adj_x1 = x1 - inset
-                adj_y1 = y1 - inset
-                # to pixel coords
-                px = int(round(adj_x0 - min_x))
-                py = int(round(adj_y0 - min_y))
-                w  = max(0, int(round(adj_x1 - adj_x0)))
-                h  = max(0, int(round(adj_y1 - adj_y0)))
-                if w <= 0 or h <= 0:
+                # raw bbox in 72dpi coordinates
+                x0_72dpi, y0_72dpi, x1_72dpi, y1_72dpi = shape.get_bbox
+                
+                # compute inset half border in 72dpi
+                inset_72dpi = (shape.line_width or 0)
+                
+                # adjust bbox for content in 72dpi
+                adj_x0_72dpi = x0_72dpi + inset_72dpi
+                adj_y0_72dpi = y0_72dpi + inset_72dpi
+                adj_x1_72dpi = x1_72dpi - inset_72dpi
+                adj_y1_72dpi = y1_72dpi - inset_72dpi
+                
+                # Convert adjusted bbox to high-resolution pixels for pasting
+                paste_x_hires = int(round((adj_x0_72dpi - min_x) * scale_factor))
+                paste_y_hires = int(round((adj_y0_72dpi - min_y) * scale_factor))
+                paste_width_hires = max(1, int(round((adj_x1_72dpi - adj_x0_72dpi) * scale_factor)))
+                paste_height_hires = max(1, int(round((adj_y1_72dpi - adj_y0_72dpi) * scale_factor)))
+
+                if paste_width_hires <= 0 or paste_height_hires <= 0:
                     continue
 
-                # paste shape content (text/image) resized to inset area
+                # paste shape content (text/image)
                 content = getattr(shape, 'content', None)
                 if isinstance(content, Image.Image):
                     img = content.convert('RGBA')
-                    if img.size != (w, h):
-                        img = img.resize((w, h), Image.Resampling.LANCZOS)
-                    canvas.paste(img, (px, py), img)
+                    
+                    if shape.container_type == 'Text':
+                        # For text, we assume _draw_text_content has already generated
+                        # the image at the correct high-resolution dimensions.
+                        # No resizing should occur here to prevent fuzziness.
+                        if img.size != (paste_width_hires, paste_height_hires):
+                            print(f"Warning: Text image size mismatch for shape {sid}. "
+                                  f"Expected ({paste_width_hires}, {paste_height_hires}), got {img.size}. "
+                                  f"This indicates an issue in _draw_text_content, but no resizing performed here.")
+                        # img is used directly as generated by _draw_text_content
+                    else: # For Image container types, resizing is necessary to fit the bounding box
+                        if img.size != (paste_width_hires, paste_height_hires):
+                            img = img.resize((paste_width_hires, paste_height_hires), Image.Resampling.LANCZOS)
+                    
+                    canvas.paste(img, (paste_x_hires, paste_y_hires), img)
 
-                # draw outline on original bbox
-                raw_px = int(round(x0 - min_x))
-                raw_py = int(round(y0 - min_y))
-                raw_w  = int(round(x1 - x0))
-                raw_h  = int(round(y1 - y0))
-                draw = ImageDraw.Draw(canvas)
+                # draw outline on original bbox (scaled to high-res canvas)
+                raw_px_hires = int(round((x0_72dpi - min_x) * scale_factor))
+                raw_py_hires = int(round((y0_72dpi - min_y) * scale_factor))
+                raw_w_hires  = int(round((x1_72dpi - x0_72dpi) * scale_factor))
+                raw_h_hires  = int(round((y1_72dpi - y0_72dpi) * scale_factor))
+                
+                # Scale line width for drawing outline on high-res canvas
+                line_width_hires = max(1, int(round(shape.line_width * scale_factor)))
+
                 if shape.line_width and shape.color:
-                    coords = [raw_px, raw_py, raw_px + raw_w, raw_py + raw_h]
+                    coords_hires = [raw_px_hires, raw_py_hires, raw_px_hires + raw_w_hires, raw_py_hires + raw_h_hires]
                     try:
                         if shape.shape_type == 'rectangle':
-                            draw.rectangle(coords, outline=shape.color, width=shape.line_width)
+                            draw.rectangle(coords_hires, outline=shape.color, width=line_width_hires)
                         elif shape.shape_type == 'oval':
-                            draw.ellipse(coords, outline=shape.color, width=shape.line_width)
+                            draw.ellipse(coords_hires, outline=shape.color, width=line_width_hires)
                         elif shape.shape_type == 'triangle':
-                            cx = (coords[0] + coords[2]) // 2
-                            pts = [(coords[0], coords[3]), (cx, coords[1]), (coords[2], coords[3])]
-                            draw.polygon(pts, outline=shape.color, width=shape.line_width)
+                            cx_hires = (coords_hires[0] + coords_hires[2]) // 2
+                            pts_hires = [(coords_hires[0], coords_hires[3]), (cx_hires, coords_hires[1]), (coords_hires[2], coords_hires[3])]
+                            draw.polygon(pts_hires, outline=shape.color, width=line_width_hires)
                         elif shape.shape_type == 'hexagon':
-                            cx = (coords[0] + coords[2]) / 2
-                            cy = (coords[1] + coords[3]) / 2
-                            hw = (coords[2] - coords[0]) / 2
-                            hh = (coords[3] - coords[1]) / 2
-                            pts = [
-                                (int(cx + hw * math.cos(math.radians(60 * i - 30))),
-                                 int(cy + hh * math.sin(math.radians(60 * i - 30))))
+                            cx_hires = (coords_hires[0] + coords_hires[2]) / 2
+                            cy_hires = (coords_hires[1] + coords_hires[3]) / 2
+                            hw_hires = (coords_hires[2] - coords_hires[0]) / 2
+                            hh_hires = (coords_hires[3] - coords_hires[1]) / 2
+                            pts_hires = [
+                                (int(cx_hires + hw_hires * math.cos(math.radians(60 * i - 30))),
+                                 int(cy_hires + hh_hires * math.sin(math.radians(60 * i - 30))))
                                 for i in range(6)
                             ]
-                            draw.polygon(pts, outline=shape.color, width=shape.line_width)
+                            draw.polygon(pts_hires, outline=shape.color, width=line_width_hires)
                     except Exception as e:
                         print(f"Outline error for shape {sid}: {e}")
 
@@ -1120,10 +1152,9 @@ class DrawingView(tk.Frame):
 
         from PIL import Image
 
-        RENDER_DPI = 300
+        # RENDER_DPI is already defined as a class attribute in DrawingView
         tw_points, th_points = target_size_points
-        tw_pixels = max(1, int(round(tw_points * RENDER_DPI / 72.0)))
-        th_pixels = max(1, int(round(th_points * RENDER_DPI / 72.0)))
+        tw_pixels = max(1, int(round(tw_points * self.RENDER_DPI / 72.0)))
+        th_pixels = max(1, int(round(th_points * self.RENDER_DPI / 72.0)))
 
         return flattened.resize((tw_pixels, th_pixels), Image.Resampling.LANCZOS)
-

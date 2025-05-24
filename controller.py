@@ -32,6 +32,7 @@ from model import DrawingModel, Layer # Import DrawingModel and Layer
 from view import DrawingView # Import DrawingView
 # Assuming constants are in a central constants.py at the root level
 from constants import SHAPE_BUTTONS, CONTAINER_TYPES, SHAPE_TYPES# Import all necessary constants
+# from utils.pdf_export import export_pdf_from_records
 
 if TYPE_CHECKING:
     from view import DrawingView # DrawingApp uses DrawingView type hint
@@ -120,6 +121,7 @@ class DrawingApp:
             "Font Size":      {"type": "int"},
             "Font Weight":    {"type": "enum",  "values": []},  # filled in dynamically below
             "Justification":  {"type": "enum",  "values": ['left','center','right']},
+            "Vertical Justification": {"type": "enum", "values": ['top', 'center', 'bottom']},
             "Text":           {"type": "str"},
         }
 
@@ -137,7 +139,7 @@ class DrawingApp:
                 "Shape Type": {
                     "type": str,
                     "get": lambda s: s.shape_type,
-                    "set": lambda s, v: s.set_shape_type(v),  # Use set_shape_type
+                    "set": lambda s, v: self.model.reclassify_shape(s.sid, v),  # Use set_shape_type
                     "validate": lambda v: v in SHAPE_TYPES,
                     "options": SHAPE_TYPES,
                 },
@@ -219,6 +221,13 @@ class DrawingApp:
                     "set": lambda s, v: s.set_justification(v),  # Use set_justification
                     "options": ["left", "center", "right"],
                 },
+                "Vertical Justification": {
+                    "type": str,
+                    "get": lambda s: s.vertical_justification,
+                    "set": lambda s, v: s.set_vertical_justification(v),
+                    "options": ["top", "center", "bottom"],              
+
+                }
             }
 
     def _build_menubar(self):
@@ -688,17 +697,17 @@ class DrawingApp:
         # Create a new shape instance based on the current tool type
         # Pass the generated ID, calculated coordinates, and font_manager
         if self.current_tool == 'rectangle':
-            new_shape = Rectangle(sid=iid, coords=ordered_coords, name=f"Rectangle {iid}", font_manager=self.font_manager)
+            new_shape = Rectangle(sid=iid, shape_type="rectangle", coords=ordered_coords, name=f"Rectangle {iid}", font_manager=self.font_manager)
         elif self.current_tool == 'oval':
-            new_shape = Oval(sid=iid, coords=ordered_coords, name=f"Oval {iid}", font_manager=self.font_manager)
+            new_shape = Oval(sid=iid, shape_type="oval", coords=ordered_coords, name=f"Oval {iid}", font_manager=self.font_manager)
         elif self.current_tool == 'triangle':
              # Triangle needs base and apex, calculate based on bounding box
              # The Triangle class __init__ should handle converting bbox to its internal representation if needed.
              # Here we pass the bounding box coords.
-            new_shape = Triangle(sid=iid, coords=ordered_coords, name=f"Triangle {iid}", font_manager=self.font_manager)
+            new_shape = Triangle(sid=iid, shape_type="triangle", coords=ordered_coords, name=f"Triangle {iid}", font_manager=self.font_manager)
         elif self.current_tool == 'hexagon':
              # Hexagon also takes a bounding box
-            new_shape = Hexagon(sid=iid, coords=ordered_coords, name=f"Hexagon {iid}", font_manager=self.font_manager)
+            new_shape = Hexagon(sid=iid, shape_type="hexagon", coords=ordered_coords, name=f"Hexagon {iid}", font_manager=self.font_manager)
         else:
             print(f"Controller._create_final_shape_object: Unknown tool type: {self.current_tool}. Returning None.")
             return None # If current_tool is not a valid shape type, return None
@@ -891,7 +900,7 @@ class DrawingApp:
                 return
 
         # --- TEXT CONTENT HANDLING ---
-        if shape and property_name in ["Text", "Font Name", "Font Size", "Font Weight", "Justification"]:
+        if shape and property_name in ["Text", "Font Name", "Font Size", "Font Weight", "Justification", "Vertical Justifcation"]:
             if property_name == "Text":
                 shape.text = new_value_str
             shape._draw_text_content()
@@ -1191,6 +1200,7 @@ class DrawingApp:
          return self.csv_data_df
 
 
+ 
     def _on_export_pdf(self):
         """Handles the PDF export menu action (Controller logic)."""
         print("\nController._on_export_pdf: PDF export initiated.")
@@ -1289,7 +1299,6 @@ class DrawingApp:
             # but a final catch here can be useful too.
             print(f"Controller._on_export_pdf: Error after calling export_to_pdf: {e}")
             # messagebox.showerror("Export Error", f"An error occurred during PDF export:\n{e}\nCheck console for details.")
-
 
     def export_to_pdf(self,
                       export_path: str,
@@ -1390,10 +1399,3 @@ class DrawingApp:
             self.root.attributes('-topmost', True) # Use topmost here
             self.root.after(100, lambda: self.root.attributes('-topmost', False)) # Turn off topmost
             self.root.focus_force() # Attempt to force focus
-
-
-def rotate_image_90_clockwise(img: Image) -> Image:
-    """Returns a new image rotated 90 degrees clockwise."""
-    # Use ROTATE_270 for clockwise rotation
-    return img.transpose(Image.Transpose.ROTATE_270)
-
